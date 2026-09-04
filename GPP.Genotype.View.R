@@ -67,9 +67,11 @@ dist[index]=NA
 # set different colors for odd or even chromosome
 m=nrow(GI)
 theCol=as.numeric(GI2[,2])%%2 # here should work, based on the Chr is numeric values
-colDisp=array("gray50",m-1)
+# Summer Beach palette (exclude #FEE199 as requested)
+.sb_cols = c("#FC757B", "#F97F5F", "#FAA26F", "#FDCD94", "#B0D6A9", "#65BDBA", "#3C9BC9")
+colDisp=array("#3C9BC9",m-1)
 colIndex=theCol==1
-colDisp[colIndex]="goldenrod"
+colDisp[colIndex]="#FC757B"
 colDisp=colDisp
 
 chr.pos=rep(NA,length(chr))
@@ -121,8 +123,13 @@ d.V0.demo=ifelse(nchar(max(d.V0))<=4,1,ifelse(nchar(max(d.V0))<=8,1000,ifelse(nc
 ylab0=ifelse(nchar(max(d.V0))<=4,1,ifelse(nchar(max(d.V0))<=8,2,ifelse(nchar(max(d.V0))<=12,3,4)))
 ylab.store=c("Frequency","Frequency (Thousands)","Frequency (Million)","Frequency (Billion)")
 d.V.hist$counts=d.V0/d.V0.demo
-plot(r0.hist, xlab="R", las=1,ylab=ylab.store[ylab0], main="b",col="gray")
-plot(d.V.hist, las=1,xlab="Distance (Kb)",col="gray", ylab=ylab.store[ylab0], main="e",cex=.5,xlim=c(0,WS0/Aver.Dis))
+.sb_cols = c("#FC757B", "#F97F5F", "#FAA26F", "#FDCD94", "#B0D6A9", "#65BDBA", "#3C9BC9")
+.r0_nbars = length(r0.hist$breaks) - 1L
+.dv_nbars = length(d.V.hist$breaks) - 1L
+.r0_col = rep_len(.sb_cols, max(1L, .r0_nbars))
+.dv_col = rep_len(.sb_cols, max(1L, .dv_nbars))
+plot(r0.hist, xlab="R", las=1,ylab=ylab.store[ylab0], main="b",col=.r0_col, border = "white")
+plot(d.V.hist, las=1,xlab="Distance (Kb)",col=.dv_col, border = "white", ylab=ylab.store[ylab0], main="e",cex=.5,xlim=c(0,WS0/Aver.Dis))
 #plot(d.V,r1,las=1,xlab="Distance (Kb)",ylim=c(-1,1),pch=16,
 # ylab="R",main="c",cex=.5,col="gray60",xlim=c(0,WS0/Aver.Dis))
 print(length(d.V))
@@ -130,12 +137,12 @@ print(length(r1))
 # 计算有效的索引
 valid_idx <- which(!is.na(d.V) & !is.na(r1))
 plot(d.V[valid_idx], r1[valid_idx], las = 1, xlab = "Distance (Kb)", ylim = c(-1, 1), 
-     pch = 16, ylab = "R", main = "c", cex = 0.5, col = "gray60", 
+     pch = 16, ylab = "R", main = "c", cex = 0.5, col = "#3C9BC9", 
      xlim = c(0, WS0/Aver.Dis))
 
 abline(h=0,col="darkred")
 plot(d.V,r1^2,las=1,xlab="Distance (Kb)",ylim=c(0,1),pch=16,
-  ylab="R sqaure", main="f",cex=.5,col="gray60",xlim=c(0,WS0/Aver.Dis))
+  ylab="R sqaure", main="f",cex=.5,col="#3C9BC9",xlim=c(0,WS0/Aver.Dis))
 
 dist[dist==0]=1
 indOrder=order(dist)
@@ -240,16 +247,47 @@ layout(mat = layout.matrix,
        heights = c(100,80,120),
        widths = c(2, 2,2))
 par(mar = c(5, 5, 2, 0))
+.sb_cols2 = c("#FC757B", "#F97F5F", "#FAA26F", "#FDCD94", "#B0D6A9", "#65BDBA", "#3C9BC9")
 if (!is.null(het.ind) && any(!is.na(het.ind))) {
-  hist(as.numeric(het.ind), las=1,xlab="Individual heterozygosity",freq=FALSE,ylab="Frequency", cex=.5,main="a")
+  .x_hetind = as.numeric(het.ind[!is.na(het.ind)])
+  .h1 = hist(.x_hetind, plot = FALSE)
+  .n1 = length(.h1$counts)
+  .col1 = rep_len(.sb_cols2, max(1L, .n1))
+  barplot(.h1$density, col = .col1, border = "white", space = 0, las = 1,
+          xlab = "Individual heterozygosity", ylab = "Frequency", main = "a")
+  .ntick = min(6L, .n1 + 1L)
+  .at1 = seq(0, .n1, length.out = .ntick)
+  .lab1 = formatC(seq(min(.h1$breaks, na.rm = TRUE), max(.h1$breaks, na.rm = TRUE), length.out = .ntick),
+                  format = "g", digits = 2)
+  axis(1, at = .at1, labels = .lab1)
 } else {
   plot.new()
   title(main = "a")
 }
 par(mar = c(5, 4, 2, 1))
-hist(het.snp, las=1,xlab="Marker heterozygosity", freq=FALSE,ylab="Frequency",cex=.5,main="b")
+.x_hetsnp = het.snp[!is.na(het.snp)]
+.h2 = hist(.x_hetsnp, plot = FALSE)
+.n2 = length(.h2$counts)
+.col2 = rep_len(.sb_cols2, max(1L, .n2))
+barplot(.h2$density, col = .col2, border = "white", space = 0, las = 1,
+        xlab = "Marker heterozygosity", ylab = "Frequency", main = "b")
+.ntick2 = min(6L, .n2 + 1L)
+.at2 = seq(0, .n2, length.out = .ntick2)
+.lab2 = formatC(seq(min(.h2$breaks, na.rm = TRUE), max(.h2$breaks, na.rm = TRUE), length.out = .ntick2),
+                format = "g", digits = 2)
+axis(1, at = .at2, labels = .lab2)
 par(mar = c(5, 4, 2, 1))
-hist(maf,las=1,ylab="Frequency", xlab="MAF",freq=FALSE, cex=.5,main="c")
+.x_maf = maf[!is.na(maf)]
+.h3 = hist(.x_maf, plot = FALSE)
+.n3 = length(.h3$counts)
+.col3 = rep_len(.sb_cols2, max(1L, .n3))
+barplot(.h3$density, col = .col3, border = "white", space = 0, las = 1,
+        xlab = "MAF", ylab = "Frequency", main = "c")
+.ntick3 = min(6L, .n3 + 1L)
+.at3 = seq(0, .n3, length.out = .ntick3)
+.lab3 = formatC(seq(min(.h3$breaks, na.rm = TRUE), max(.h3$breaks, na.rm = TRUE), length.out = .ntick3),
+                format = "g", digits = 2)
+axis(1, at = .at3, labels = .lab3)
 
 grDevices::dev.off()
 print(paste("GAPIT.Genotype.View ", ". pdfs generate.","successfully!" ,sep = ""))
