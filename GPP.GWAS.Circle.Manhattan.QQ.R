@@ -1,12 +1,145 @@
 `GAPIT.Multiple.Manhattan` <-
 function(model_store,DPP=50000,chor_taxa=NULL,cutOff=0.01,band=5,seqQTN=NULL,byTraits=FALSE,
     Y.names=NULL,GM=NULL,interQTN=NULL,WS=10e5,outpch=NULL,inpch=NULL,
-    plot.style="Oceanic",plot.line=TRUE,plot.type=c("h","s","w")){
+    plot.style="MarineBreeze",plot.line=TRUE,plot.type=c("h","s","w")){
     #Object: Make a Manhattan Plot
     #Output: pdfs of the Multiple Manhattan Plot
     #Authors: Zhiwu Zhang and Jiabo Wang
     # Last update: AUG 24, 2022
     ##############################################################################################
+  .gpp_extract_gwas_result <- function(environ_result) {
+    df <- environ_result
+    cn <- colnames(df)
+    cn <- trimws(cn)
+    cn <- sub("^\ufeff", "", cn)
+    cn <- sub("^ï\\.\\.", "", cn)
+    cn <- gsub("[[:space:][:cntrl:]]+", "", cn)
+    cn_norm <- gsub("[^a-z0-9]+", "_", tolower(cn))
+    cn_norm <- gsub("_+", "_", cn_norm)
+    cn_norm <- gsub("^_+|_+$", "", cn_norm)
+    pick_col <- function(norm_names, candidates) {
+      idx <- which(norm_names %in% candidates)
+      if (length(idx) >= 1) return(idx[1])
+      integer(0)
+    }
+    to_num <- function(x) suppressWarnings(as.numeric(x))
+    snp_idx <- pick_col(cn_norm, c("snp", "rs", "rsid", "marker", "id"))
+    chr_idx <- pick_col(cn_norm, c("chr", "chrom", "chromosome"))
+    pos_idx <- pick_col(cn_norm, c("pos", "position", "bp", "bp_position"))
+    maf_idx <- pick_col(cn_norm, c("maf", "minor_allele_frequency", "minorallelefrequency"))
+    p_candidates <- unique(c(which(grepl("^trait_", cn_norm)), which(cn_norm %in% c("p", "p_value", "pvalue", "pval", "p_wald", "p_value_wald"))))
+    p_candidates <- setdiff(p_candidates, which(cn_norm %in% c("maf", "effect", "se", "stderr", "beta", "nobs")))
+    pick_p <- function(df, idxs) {
+      if (length(idxs) < 1) return(integer(0))
+      scores01 <- rep(-Inf, length(idxs))
+      scorespos <- rep(-Inf, length(idxs))
+      for (i in seq_along(idxs)) {
+        v <- to_num(df[[idxs[i]]])
+        ok01 <- is.finite(v) & v > 0 & v <= 1
+        okpos <- is.finite(v) & v > 0
+        scores01[i] <- sum(ok01)
+        scorespos[i] <- sum(okpos)
+      }
+      if (max(scores01, na.rm = TRUE) > 0) return(idxs[which.max(scores01)])
+      if (max(scorespos, na.rm = TRUE) > 0) return(idxs[which.max(scorespos)])
+      integer(0)
+    }
+    p_idx <- pick_p(df, p_candidates)
+    if (length(p_idx) < 1) {
+      p2 <- which(grepl("^p($|_)", cn_norm))
+      p_idx <- pick_p(df, p2)
+    }
+    if (length(chr_idx) < 1 || length(pos_idx) < 1 || length(p_idx) < 1) {
+      stop("Cannot find required columns (Chr/Pos/P) in GWAS result. Columns: ", paste(cn, collapse = ", "))
+    }
+    out <- data.frame(
+      SNP = if (length(snp_idx) >= 1) as.character(df[[snp_idx]]) else df[[1]],
+      Chr = df[[chr_idx]],
+      Pos = df[[pos_idx]],
+      P.value = df[[p_idx]],
+      MAF = if (length(maf_idx) >= 1) df[[maf_idx]] else NA_real_,
+      stringsAsFactors = FALSE
+    )
+    .gpp_clean_chr <- function(ch) {
+      ch <- as.character(ch)
+      ch <- trimws(ch)
+      ch <- sub("^\ufeff", "", ch)
+      ch <- sub("^ï\\.\\.", "", ch)
+      ch <- gsub("[[:space:][:cntrl:]]+", "", ch)
+      num_ch <- suppressWarnings(as.numeric(ch))
+      not_missing = !is.na(ch) & nzchar(ch)
+      has_non_numeric_label = any(not_missing & is.na(num_ch))
+      if (has_non_numeric_label) {
+        return(ch)
+      }
+      all_int = if (any(not_missing)) {
+        all(is.finite(num_ch[not_missing]) & (num_ch[not_missing] == round(num_ch[not_missing])))
+      } else TRUE
+      if (all_int) {
+        return(num_ch)
+      }
+      ch
+    }
+    out$Chr <- .gpp_clean_chr(out$Chr)
+    out$Pos <- to_num(out$Pos)
+    p <- to_num(out$P.value)
+    if (sum(is.finite(p) & p > 0 & p <= 1) == 0 && sum(is.finite(p) & p > 0) > 0 && stats::median(p, na.rm = TRUE) > 1) {
+      p <- 10^(-p)
+    }
+    out$P.value <- p
+    out$MAF <- to_num(out$MAF)
+    out
+  }
+  .gpp_clean_chr <- function(ch) {
+    ch <- as.character(ch)
+    ch <- trimws(ch)
+    ch <- sub("^\ufeff", "", ch)
+    ch <- sub("^ï\\.\\.", "", ch)
+    ch <- gsub("[[:space:][:cntrl:]]+", "", ch)
+    num_ch <- suppressWarnings(as.numeric(ch))
+    not_missing = !is.na(ch) & nzchar(ch)
+    has_non_numeric_label = any(not_missing & is.na(num_ch))
+    if (has_non_numeric_label) {
+      return(ch)
+    }
+    all_int = if (any(not_missing)) {
+      all(is.finite(num_ch[not_missing]) & (num_ch[not_missing] == round(num_ch[not_missing])))
+    } else TRUE
+    if (all_int) {
+      return(num_ch)
+    }
+    ch
+  }
+  .gpp_map_xy <- function(chr_vec) {
+    chr_vec_c <- as.character(chr_vec)
+    options(warn = -1)
+    numeric.chr <- suppressWarnings(as.numeric(chr_vec_c))
+    options(warn = 0)
+    max.chr <- suppressWarnings(max(numeric.chr, na.rm = TRUE))
+    if (!is.finite(max.chr)) max.chr <- 0
+    map.xy.index <- which(!(numeric.chr %in% c(0:max.chr)))
+    chr.xy <- character(0)
+    if (length(map.xy.index) != 0) {
+      chr.xy <- unique(chr_vec_c[map.xy.index])
+      for (k in seq_along(chr.xy)) {
+        chr_vec_c[chr_vec_c == chr.xy[k]] <- max.chr + k
+      }
+    }
+    list(
+      mapped = suppressWarnings(as.numeric(chr_vec_c)),
+      chr.xy = chr.xy,
+      max.chr = max.chr
+    )
+  }
+  if (!is.null(GM)) {
+    if (ncol(GM) >= 2) {
+      gm_chr <- .gpp_clean_chr(GM[, 2])
+      GM[, 2] <- gm_chr
+    }
+    if (ncol(GM) >= 3) {
+      GM[, 3] <- suppressWarnings(as.numeric(GM[, 3]))
+    }
+  }
   Nenviron=length(model_store)*length(Y.names)
   environ_name=NULL
   new_xz=NULL
@@ -30,7 +163,44 @@ function(model_store,DPP=50000,chor_taxa=NULL,cutOff=0.01,band=5,seqQTN=NULL,byT
        }
     }
     }
-sig_pos=NULL
+# ---- Global chromosome set (over ALL traits + GM) ----
+.global_combined_chrs = character(0)
+if (!is.null(GM) && nrow(GM) >= 1 && ncol(GM) >= 2) {
+  .global_combined_chrs = c(.global_combined_chrs, as.character(GM[, 2]))
+}
+for (.tmp_i in seq_along(environ_name)) {
+  .tmp_f = paste("GAPIT.Association.GWAS_Results.", environ_name[.tmp_i], ".csv", sep = "")
+  .tmp_df = tryCatch(read.csv(.tmp_f, head = TRUE, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (!is.null(.tmp_df) && nrow(.tmp_df) >= 1) {
+    .tmp_ex = tryCatch(.gpp_extract_gwas_result(.tmp_df), error = function(e) NULL)
+    if (!is.null(.tmp_ex) && nrow(.tmp_ex) >= 1) {
+      .global_combined_chrs = c(.global_combined_chrs, as.character(.tmp_ex[, 2]))
+    }
+  }
+}
+.global_combined_chrs = .global_combined_chrs[!is.na(.global_combined_chrs) & nzchar(.global_combined_chrs)]
+.global_map = .gpp_map_xy(.global_combined_chrs)
+.global_unique_chr = as.character(unique(.global_combined_chrs))
+.global_unique_ord = order(.global_map$mapped[match(.global_unique_chr, as.character(.global_combined_chrs))])
+.chm_to_analyze = .global_unique_chr[.global_unique_ord]
+.chm_to_analyze = .chm_to_analyze[!is.na(.chm_to_analyze) & nzchar(.chm_to_analyze)]
+.nchr = length(.chm_to_analyze)
+.chm_to_pos = setNames(seq_along(.chm_to_analyze), .chm_to_analyze)
+print(paste("[Info] Global chromosomes detected (", .nchr, "): ",
+            paste(head(.chm_to_analyze, 20), collapse = ", "),
+            if (.nchr > 20) paste0(" ...(+", .nchr - 20, ")") else "", sep = ""))
+non_num_chrs = as.character(.global_map$chr.xy)
+non_num_chrs = non_num_chrs[!is.na(non_num_chrs) & nzchar(non_num_chrs)]
+if (length(non_num_chrs) >= 1) {
+  print(paste("[Info] Non-numeric chromosomes (X/Y/MT/...) preserved: ",
+              paste(non_num_chrs, collapse = ", "), sep = ""))
+} else {
+  print("[Info] No non-numeric chromosomes found; all Chr were numeric.")
+}
+# ---- END Global chromosome set ----
+sig_pos_snp=NULL
+sig_pos_chro=NULL
+sig_pos_newx=NULL
 simulation=FALSE
 if(!is.null(seqQTN)){
 	simulation=TRUE
@@ -42,115 +212,202 @@ for(i in 1:length(environ_name))
 {
   print(paste("Reading GWAS result with ",environ_name[i],sep=""))
   environ_result=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[i],".csv",sep=""),head=T)
+  environ_result=.gpp_extract_gwas_result(environ_result)
   num.markers=nrow(environ_result)
-  environ_result=environ_result[order(environ_result[,3]),]
-  environ_result=environ_result[order(environ_result[,2]),]
+  .gpp_xy <- .gpp_map_xy(environ_result[, 2])
+  keep_xy_idx <- which(is.finite(.gpp_xy$mapped) &
+                         !is.na(environ_result[, 3]) & is.finite(environ_result[, 3]) &
+                         !is.na(environ_result[, 4]) & is.finite(environ_result[, 4]))
+  if (length(keep_xy_idx) < nrow(environ_result)) {
+    environ_result <- environ_result[keep_xy_idx, , drop=FALSE]
+    .gpp_xy$mapped <- .gpp_xy$mapped[keep_xy_idx]
+  }
+  ord1 <- order(environ_result[, 3])
+  environ_result <- environ_result[ord1, , drop=FALSE]
+  .gpp_xy$mapped <- .gpp_xy$mapped[ord1]
+  ord2 <- order(.gpp_xy$mapped)
+  environ_result <- environ_result[ord2, , drop=FALSE]
+  .gpp_xy$mapped <- .gpp_xy$mapped[ord2]
   environ_filter=environ_result[!is.na(environ_result[,4]),]
   themax.y=round(max(-log10(environ_filter[,4])),0)
   themax.y0=round(max(c(themax.y,themax.y0)),0)
-  chm.to.analyze <- unique(environ_result[,2])
-  nchr=length(chm.to.analyze)
 
   y_filter=environ_filter[environ_filter[,4]<(cutOff/(num.markers)),,drop=FALSE]
   traits=environ_name[i]
-  # print(head(y_filter))
-  # print(traits)
   if(nrow(y_filter)>0)y_filter=cbind(as.matrix(y_filter[,1:5]),traits)
   y_filter0=rbind(y_filter0,y_filter)
-  # write.table(y_filter,paste("GAPIT.Filter_",environ_name[i],"_GWAS_result.txt",sep=""))
 
-  result=environ_result[,1:4]
+  result=environ_result
   result=result[match(as.character(GM[,1]),as.character(result[,1])),]
   rownames(result)=seq_len(nrow(result))
-  #print(i)
   if(i==1){
     result0=result
+    # Keep only core columns: SNP, Chr, Pos, <trait1>
     colnames(result0)[4]=environ_name[i]
+    if (ncol(result0) > 4) result0 <- result0[, 1:4, drop=FALSE]
     }
   if(i!=1){
-    result0=merge(result0,result[,c(1,4)],by.x=colnames(result0)[1],by.y=colnames(result)[1])
-    colnames(result0)[i+3]=environ_name[i]
+    result_join <- result[, c(1, 4), drop=FALSE]
+    # Merge with explicit suffixes; we will rename the NEW trait column (always last)
+    result0=merge(result0, result_join,
+                  by.x = colnames(result0)[1],
+                  by.y = colnames(result_join)[1],
+                  suffixes = c(".x", ".y"),
+                  all.x = TRUE)
+    # The newly added trait p-value column is ALWAYS the LAST column after merge
+    colnames(result0)[ncol(result0)] = environ_name[i]
+    # Safety: clean any left-over .x / .y artifact names in case merge left them
+    tmp_cn <- colnames(result0)
+    if (any(grepl("\\.x$|\\.y$", tmp_cn[-c(1:3)]))) {
+      tmp_cn[grepl("^P\\.value(\\.x|\\.y)?$", tmp_cn)] <- environ_name[i]
+      colnames(result0) <- tmp_cn
+    }
     }
   rownames(result)=seq_len(nrow(result))
   result[is.na(result[,4]),4]=1
-  # map_store=max.x
-  sig_pos=append(sig_pos,as.numeric(rownames(result[result[!is.na(result[,4]),4]<(cutOff/nrow(result)),,drop=FALSE])))
+  # Use SNP name based significant index instead of rownumber
+  m_threshold = cutOff / nrow(result)
+  p_col <- suppressWarnings(as.numeric(result[, 4]))
+  sig_mask <- !is.na(p_col) & is.finite(p_col) & (p_col < m_threshold)
+  if (any(sig_mask)) {
+    sig_pos_snp <- c(sig_pos_snp, as.character(result[sig_mask, 1]))
+    sig_pos_chro <- c(sig_pos_chro, as.character(result[sig_mask, 2]))
+    sig_pos_newx <- c(sig_pos_newx, rep_len(2, sum(sig_mask)))
+  }
 }
   write.csv(y_filter0,paste("GAPIT.Association.Filter_GWAS_results.csv",sep=""),quote=FALSE)
 
-# print(sig_pos)
-#if(length(sig_pos)!=0)sig_pos=sig_pos[!duplicated(sig_pos)]
- if(length(sig_pos[!is.na(sig_pos)])>1)
- {
- # {     x_matrix=as.matrix(table(sig_pos))
- #       x_matrix=cbind(as.data.frame(rownames(x_matrix)),x_matrix)
-       #print(x_matrix)
-        lastbase=0
-        map_store=cbind(as.data.frame(GM[,2]),as.numeric(GM[,3]))
-        ticks=NULL
-        # print(head(map_store))
-        max.x=NULL
-        for (j in unique(map_store[,1]))
-        {
-            index=map_store[,1]==j
-            ticks <- c(ticks, lastbase+mean(map_store[index,2]))
-            map_store[index,2]=as.numeric(map_store[index,2])+lastbase
-            lastbase=max(as.numeric(map_store[index,2]))
-            max.x=c(max.x,max(as.numeric(map_store[index,2])))
-        }
-        # print(ticks)
-       max.x=c(min(as.numeric(map_store[,2])),max.x)
-       store.x=c(store.x,as.numeric(map_store[,2]))
-       # colnames(x_matrix)=c("pos","times")
-       new_xz0=cbind(sig_pos,map_store[as.numeric(as.character(sig_pos)),,drop=FALSE])
-       common=as.numeric(new_xz0[,3])
-       scom=sort(common)
-       de.sc=scom[-1]-scom[-length(scom)]
-       dayu1.index=duplicated(scom)|c(abs(de.sc)<WS,FALSE)
-
-       # print(table(dayu1.index))
-       if(sum(dayu1.index)>0)
-       {
-       scom2=scom[dayu1.index]
-       # scom2=scom2[!duplicated(scom2)]
-       # print(new_xz0)
-       # print(scom2)
-       sc.index=as.character(new_xz0[,3])%in%scom2
-       # print(table(sc.index))
-       new_xz=new_xz0[sc.index,,drop=FALSE]
-       # print(new_xz)
-       new_xz=cbind(new_xz[,1],2,new_xz[,-1])
-       new_xz[duplicated(new_xz[,4]),2]=1
-       colnames(new_xz)=c("pos","times","chro","xlab")
-       new_xz=new_xz[!duplicated(new_xz),]
-       new_xz=as.matrix(new_xz)
-       new_xz=new_xz[new_xz[,2]!="0",]
-       new_xz=matrix(as.numeric(new_xz),length(as.vector(new_xz))/4,4)
-       }
-       # print(head(new_xz))
-}else{
-        lastbase=0
-        map_store=cbind(as.data.frame(GM[,2]),as.numeric(GM[,3]))
-        ticks=NULL
-        max.x=NULL
-        # print(head(map_store))
-        for (j in unique(map_store[,1]))
-        {
-            index=map_store[,1]==j
-            ticks <- c(ticks, lastbase+mean(map_store[index,2]))
-            map_store[index,2]=as.numeric(map_store[index,2])+lastbase
-            lastbase=max(as.numeric(map_store[index,2]))
-            max.x=c(max.x,max(as.numeric(map_store[index,2])))
-        }
-       max.x=c(min(as.numeric(map_store[,2])),max.x)
-       store.x=c(store.x,as.numeric(map_store[,2]))
+# Build map_store globally from GM (sorted by mapped to keep X/Y at end)
+gm_map_chrs = if (!is.null(GM) && nrow(GM) >= 1 && ncol(GM) >= 2) as.character(GM[, 2]) else character(0)
+.gm_global_map = .gpp_map_xy(gm_map_chrs)
+.ms_v1 = gm_map_chrs
+.ms_v2 = if (!is.null(GM) && nrow(GM) >= 1 && ncol(GM) >= 3) suppressWarnings(as.numeric(GM[, 3])) else numeric(0)
+.ms_ok = !is.na(.ms_v1) & nzchar(.ms_v1) & is.finite(.ms_v2)
+if (length(.ms_ok) >= 1) {
+  .ms_v1 = .ms_v1[.ms_ok]
+  .ms_v2 = .ms_v2[.ms_ok]
+  .gm_global_map$mapped = .gm_global_map$mapped[.ms_ok]
+  if (!is.null(GM) && nrow(GM) >= 1) GM = GM[.ms_ok, , drop=FALSE]
 }
+map_store = if (length(.ms_v1) >= 1) {
+  data.frame(V1 = as.character(.ms_v1), V2 = as.numeric(.ms_v2),
+             stringsAsFactors = FALSE)
+} else {
+  data.frame(V1 = character(0), V2 = numeric(0), stringsAsFactors = FALSE)
+}
+if (nrow(map_store) >= 1) {
+  ms_ord = order(.gm_global_map$mapped, as.numeric(map_store[, 2]), na.last = NA)
+  if (length(ms_ord) >= 1) {
+    map_store = map_store[ms_ord, , drop=FALSE]
+    .gm_global_map$mapped = .gm_global_map$mapped[ms_ord]
+    if (!is.null(GM) && nrow(GM) >= 1) GM = GM[ms_ord, , drop=FALSE]
+  }
+}
+.ms_chrs = if (nrow(map_store) >= 1) as.character(map_store[, 1]) else character(0)
+.ms_unique = if (length(.ms_chrs) >= 1) {
+  ord_tmp = order(.gpp_map_xy(.ms_chrs)$mapped[match(as.character(unique(.ms_chrs)),
+                                                      as.character(.ms_chrs))])
+  as.character(unique(.ms_chrs))[ord_tmp]
+} else character(0)
+.ms_unique = .ms_unique[!is.na(.ms_unique) & nzchar(.ms_unique)]
+if (length(.ms_unique) >= 1) .chm_to_analyze = unique(c(.ms_unique, .chm_to_analyze))
+.chm_global_ord = order(.gpp_map_xy(.chm_to_analyze)$mapped[match(as.character(.chm_to_analyze),
+                                                                   as.character(.chm_to_analyze))])
+.chm_to_analyze = .chm_to_analyze[.chm_global_ord]
+.chm_to_analyze = .chm_to_analyze[!is.na(.chm_to_analyze) & nzchar(.chm_to_analyze)]
+.nchr = length(.chm_to_analyze)
+.chm_to_pos = setNames(seq_along(.chm_to_analyze), .chm_to_analyze)
+# Build cumulative positions + ticks (global, including X/Y)
+lastbase=0
+ticks=NULL
+max.x=NULL
+.ms_len = if (nrow(map_store) >= 1) seq_len(nrow(map_store)) else integer(0)
+if (length(.ms_unique) >= 1 && nrow(map_store) >= 1) {
+  .ms_allchrs = as.character(map_store[, 1])
+  for (j in .ms_unique)
+  {
+    idx = which(.ms_allchrs == j)
+    if (length(idx) == 0) next
+    posv = as.numeric(map_store[idx, 2])
+    posv[!is.finite(posv)] = 0
+    mn = mean(posv, na.rm = TRUE)
+    if (!is.finite(mn)) mn = 0
+    ticks = c(ticks, lastbase + mn)
+    posv2 = posv + lastbase
+    posv2[!is.finite(posv2)] = lastbase
+    map_store[idx, 2] = posv2
+    mx = max(posv2, na.rm = TRUE)
+    if (!is.finite(mx)) mx = lastbase
+    lastbase = mx
+    max.x = c(max.x, mx)
+  }
+  minv = suppressWarnings(min(as.numeric(map_store[, 2]), na.rm = TRUE))
+  if (!is.finite(minv)) minv = 0
+  max.x = c(minv, max.x)
+} else {
+  max.x = 0
+}
+store.x = as.numeric(map_store[, 2])
+if (length(store.x) == 0) store.x = 0
+# Build new_xz using SNP name (match on GM)
+if (length(sig_pos_snp) >= 2) {
+  sig_pos_snp_uniq = unique(as.character(sig_pos_snp))
+  gm_snps = if (!is.null(GM) && nrow(GM) >= 1) as.character(GM[, 1]) else character(0)
+  ms_rows = match(sig_pos_snp_uniq, gm_snps)
+  ok_rows = which(is.finite(ms_rows) & ms_rows >= 1 & ms_rows <= nrow(map_store))
+  if (length(ok_rows) >= 2) {
+    sig_pos_snp_uniq = sig_pos_snp_uniq[ok_rows]
+    ms_rows = ms_rows[ok_rows]
+    new_xz0_df = data.frame(
+      pos = as.character(sig_pos_snp_uniq),
+      times = as.integer(2),
+      chro = as.character(map_store[ms_rows, 1]),
+      xlab = as.numeric(map_store[ms_rows, 2]),
+      stringsAsFactors = FALSE
+    )
+    # Collapse duplicates (same new_xz) similar to old dayu logic
+    xlab_vals = as.numeric(new_xz0_df$xlab)
+    scom = sort(xlab_vals)
+    if (length(scom) >= 2) {
+      de.sc = scom[-1] - scom[-length(scom)]
+      dayu1.index = duplicated(scom) | c(abs(de.sc) < WS, FALSE)
+      if (any(dayu1.index)) {
+        scom2 = scom[dayu1.index]
+        sc.index = as.character(new_xz0_df$xlab) %in% as.character(scom2)
+        new_xz_df = new_xz0_df[sc.index, , drop=FALSE]
+      } else {
+        new_xz_df = new_xz0_df
+      }
+    } else {
+      new_xz_df = new_xz0_df
+    }
+    if (nrow(new_xz_df) >= 1) {
+      dup_idx = duplicated(new_xz_df$xlab)
+      if (any(dup_idx)) new_xz_df$times[dup_idx] = 1
+      new_xz_df = new_xz_df[!duplicated(new_xz_df), , drop=FALSE]
+      new_xz_df = new_xz_df[as.character(new_xz_df$times) != "0", , drop=FALSE]
+      # Convert chromosome ids to mapped integers for new_xz[,3]
+      chro_to_int = suppressWarnings(as.numeric(as.character(new_xz_df$chro)))
+      map_int = .gpp_map_xy(as.character(new_xz_df$chro))
+      chro_to_int = as.numeric(map_int$mapped)
+      new_xz = cbind(
+        pos = match(as.character(new_xz_df$pos), gm_snps),
+        times = as.integer(new_xz_df$times),
+        chro = chro_to_int,
+        xlab = as.numeric(new_xz_df$xlab)
+      )
+      new_xz = matrix(as.numeric(new_xz), nrow = nrow(new_xz), ncol = 4)
+    }
+  }
+}
+if (!exists("new_xz", inherits = FALSE) || !is.matrix(new_xz) || nrow(new_xz) < 1) new_xz = NULL
 
 # print(new_xz)
 # setup colors
 # print(head(result))
 # chm.to.analyze <- unique(result[,2])
-nchr=length(chm.to.analyze)
+chm.to.analyze <- .chm_to_analyze
+nchr <- .nchr
 size=1 #1
 ratio=10 #5
 base=1 #1
@@ -169,6 +426,7 @@ col.Ocean=rep(c("steelblue4","cyan3"),ceiling(numCHR/2))
 col.PLINK=rep(c("gray10","gray70"),ceiling(numCHR/2))     
 col.Beach=rep(c("turquoise4","indianred3","darkolivegreen3","red","aquamarine3","darkgoldenrod"),ceiling(numCHR/5))
 col.Oceanic=rep(c(  '#EC5f67',    '#FAC863',  '#99C794',    '#6699CC',  '#C594C5'),ceiling(numCHR/5))
+col.MarineBreeze=rep(c("#BFDFD2","#51999F","#4198AC","#7BC0CD","#DBCB92","#ECB66C","#EA9E58","#ED8D5A"),ceiling(numCHR/8))
 col.cougars=rep(c(  '#990000',    'dimgray'),ceiling(numCHR/2))  
 if(plot.style=="Rainbow")plot.color= col.Rainbow
 if(plot.style =="FarmCPU")plot.color= col.Rainbow
@@ -177,7 +435,8 @@ if(plot.style =="Congress")plot.color= col.Congress
 if(plot.style =="Ocean")plot.color= col.Ocean
 if(plot.style =="PLINK")plot.color= col.PLINK
 if(plot.style =="Beach")plot.color= col.Beach
-if(plot.style =="Oceanic")plot.color= col.Oceanic
+if(plot.style=="Oceanic")plot.color= col.Oceanic
+if(plot.style=="MarineBreeze")plot.color= col.MarineBreeze
 if(plot.style =="cougars")plot.color= col.cougars  
 
 if("h"%in%plot.type)
@@ -199,9 +458,20 @@ if("h"%in%plot.type)
         par(mar = c(1.5,8,0.5,8))    
         }
        environ_result=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[k],".csv",sep=""),head=T)
-       result=environ_result[,1:4]
-       result=result[order(result[,3]),]
-       result=result[order(result[,2]),]
+       environ_result=.gpp_extract_gwas_result(environ_result)
+       result=environ_result
+       .gpp_h0_map <- .gpp_map_xy(result[, 2])
+       keep_h0 <- which(is.finite(.gpp_h0_map$mapped) & !is.na(result[,3]) & !is.na(result[,4]))
+       if (length(keep_h0) < nrow(result)) {
+         result <- result[keep_h0, , drop=FALSE]
+         .gpp_h0_map$mapped <- .gpp_h0_map$mapped[keep_h0]
+       }
+       result_h0_ord <- order(result[, 3])
+       result <- result[result_h0_ord, , drop=FALSE]
+       .gpp_h0_map$mapped <- .gpp_h0_map$mapped[result_h0_ord]
+       result_h0_ord2 <- order(.gpp_h0_map$mapped)
+       result <- result[result_h0_ord2, , drop=FALSE]
+       .gpp_h0_map$mapped <- .gpp_h0_map$mapped[result_h0_ord2]
        result=result[match(as.character(GM[,1]),as.character(result[,1])),]
        rownames(result)=seq_len(nrow(result))
        GI.MP=result[,c(2:4)]
@@ -215,8 +485,10 @@ if("h"%in%plot.type)
     #Retain SNPs that have P values between 0 and 1 (not na etc)
        GI.MP <- GI.MP[GI.MP[,3]>0,]
        GI.MP <- GI.MP[GI.MP[,3]<=1,]
-    #Remove chr 0 and 99
-       GI.MP <- GI.MP[GI.MP[,1]!=0,]
+    #Remove chr 0 only (preserve X/Y/99 etc non-zero non-standard chromosomes)
+       zero_h1_chr <- suppressWarnings(as.numeric(as.character(GI.MP[,1])))
+       zero_h1_mask <- is.finite(zero_h1_chr) & zero_h1_chr == 0
+       GI.MP <- GI.MP[!zero_h1_mask,,drop=FALSE]
        total_chromo=length(unique(GI.MP[,1]))
     # print(dim(GI.MP))
        if(!is.null(seqQTN))GI.MP[seqQTN,borrowSlot]=1
@@ -224,8 +496,14 @@ if("h"%in%plot.type)
        GI.MP[,3] <-  -log10(GI.MP[,3])
        GI.MP[,5]=1:numMarker
        y.lim <- ceiling(max(GI.MP[,3]))  
-       chm.to.analyze <- unique(GI.MP[,1])
-       nchr=length(chm.to.analyze)
+       .gpp_h1_map <- .gpp_map_xy(GI.MP[,1])
+       .local_chr = as.character(unique(GI.MP[,1]))
+       .merged_chr = unique(c(as.character(.chm_to_analyze), .local_chr))
+       .map_merged = .gpp_map_xy(.merged_chr)
+       chm.to.analyze = .merged_chr[order(.map_merged$mapped)]
+       nchr = length(chm.to.analyze)
+       GI.MP_order_chr <- .gpp_h1_map$mapped
+       GI.MP <- GI.MP[order(GI.MP_order_chr, GI.MP[,2]), ]
        GI.MP[,6]=1:(nrow(GI.MP))
        MP_store=GI.MP
        index_GI=MP_store[,3]>=0
@@ -242,21 +520,10 @@ if("h"%in%plot.type)
           }
        x0 <- as.numeric(MP_store[,2])
        y0 <- as.numeric(MP_store[,3])
-       z0 <- as.character(MP_store[,1])
-       # convert chromosome character to number
-       chor_taxa=as.character(unique(MP_store[,1]))
-       chor_taxa=chor_taxa[order(as.numeric(as.character(chor_taxa)))]
-       chr_letter=grep("[A-Z]|[a-z]",chor_taxa)
-       if(!setequal(integer(0),chr_letter))
-         {     
-           z0=as.character(MP_store[,1])
-           for(i in 1:(length(chor_taxa)))
-              {
-                index=z0==chor_taxa[i]
-                z0[index]=i    
-              }
-          }
-       z0=as.numeric(z0)
+       chor_taxa <- as.character(chm.to.analyze)
+       chor_to_z <- setNames(seq_along(chor_taxa), chor_taxa)
+       z0 <- as.numeric(chor_to_z[as.character(MP_store[,1])])
+       if(anyNA(z0)) z0[is.na(z0)] <- 1L
        # print(ticks)
        x1=sort(x0)
        position=order(y0,decreasing = TRUE)
@@ -337,10 +604,21 @@ if("w"%in%plot.type)
 
         }
   environ_result=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[k],".csv",sep=""),head=T)
+  environ_result=.gpp_extract_gwas_result(environ_result)
   #print(environ_result[as.numeric(new_xz[,1]),])
-  result=environ_result[,1:4]
-    result=result[order(result[,3]),]
-    result=result[order(result[,2]),]
+  result=environ_result
+    .gpp_w0_map <- .gpp_map_xy(result[, 2])
+    keep_w0 <- which(is.finite(.gpp_w0_map$mapped) & !is.na(result[,3]) & !is.na(result[,4]))
+    if (length(keep_w0) < nrow(result)) {
+      result <- result[keep_w0, , drop=FALSE]
+      .gpp_w0_map$mapped <- .gpp_w0_map$mapped[keep_w0]
+    }
+    result_w0_ord <- order(result[, 3])
+    result <- result[result_w0_ord, , drop=FALSE]
+    .gpp_w0_map$mapped <- .gpp_w0_map$mapped[result_w0_ord]
+    result_w0_ord2 <- order(.gpp_w0_map$mapped)
+    result <- result[result_w0_ord2, , drop=FALSE]
+    .gpp_w0_map$mapped <- .gpp_w0_map$mapped[result_w0_ord2]
     result=result[match(as.character(GM[,1]),as.character(result[,1])),]
     rownames(result)=seq_len(nrow(result))
     GI.MP=result[,c(2:4)]
@@ -357,8 +635,10 @@ if("w"%in%plot.type)
     #Retain SNPs that have P values between 0 and 1 (not na etc)
     GI.MP <- GI.MP[GI.MP[,3]>0,]
     GI.MP <- GI.MP[GI.MP[,3]<=1,]
-    #Remove chr 0 and 99
-    GI.MP <- GI.MP[GI.MP[,1]!=0,]
+    #Remove chr 0 only (preserve X/Y/99 etc non-zero non-standard chromosomes)
+    zero_w1_chr <- suppressWarnings(as.numeric(as.character(GI.MP[,1])))
+    zero_w1_mask <- is.finite(zero_w1_chr) & zero_w1_chr == 0
+    GI.MP <- GI.MP[!zero_w1_mask,,drop=FALSE]
     total_chromo=length(unique(GI.MP[,1]))
     # print(dim(GI.MP))
     if(!is.null(seqQTN))GI.MP[seqQTN,borrowSlot]=1
@@ -368,9 +648,14 @@ if("w"%in%plot.type)
     GI.MP[,5]=1:numMarker
     y.lim <- ceiling(max(GI.MP[,3]))
     
-    chm.to.analyze <- unique(GI.MP[,1])
-    # chm.to.analyze=chm.to.analyze[order(chm.to.analyze)]
-    nchr=length(chm.to.analyze)
+    .gpp_w1_map <- .gpp_map_xy(GI.MP[,1])
+    .local_chr = as.character(unique(GI.MP[,1]))
+    .merged_chr = unique(c(as.character(.chm_to_analyze), .local_chr))
+    .map_merged = .gpp_map_xy(.merged_chr)
+    chm.to.analyze = .merged_chr[order(.map_merged$mapped)]
+    nchr = length(chm.to.analyze)
+    GI.MP_order_chr <- .gpp_w1_map$mapped
+    GI.MP <- GI.MP[order(GI.MP_order_chr, GI.MP[,2]), ]
     GI.MP[,6]=1:(nrow(GI.MP))
     MP_store=GI.MP
         index_GI=MP_store[,3]>=0
@@ -387,25 +672,14 @@ if("w"%in%plot.type)
         
         x0 <- as.numeric(MP_store[,2])
         y0 <- as.numeric(MP_store[,3])
-        z0 <- as.character(MP_store[,1])
-       # convert chromosome character to number
-       chor_taxa=as.character(unique(MP_store[,1]))
-       chor_taxa=chor_taxa[order(as.numeric(as.character(chor_taxa)))]
-       chr_letter=grep("[A-Z]|[a-z]",chor_taxa)
-       if(!setequal(integer(0),chr_letter))
-         {     
-           z0=as.character(MP_store[,1])
-           for(i in 1:(length(chor_taxa)))
-              {
-                index=z0==chor_taxa[i]
-                z0[index]=i    
-              }
-          }
-        z0=as.numeric(z0)
-        x1=sort(x0)
+        chor_taxa <- as.character(chm.to.analyze)
+        chor_to_z <- setNames(seq_along(chor_taxa), chor_taxa)
+        z0 <- as.numeric(chor_to_z[as.character(MP_store[,1])])
+       if(anyNA(z0)) z0[is.na(z0)] <- 1L
+       x1=sort(x0)
 
-        position=order(y0,decreasing = TRUE)
-        values=y0[position]
+       position=order(y0,decreasing = TRUE)
+       values=y0[position]
         if(length(values)<=DPP)
         {
          index=position[c(1:length(values))]
@@ -457,7 +731,7 @@ if("w"%in%plot.type)
         abline(h=bonferroniCutOff,lty=1,untf=T,lwd=1,col="forestgreen")
         axis(2, yaxp=c(0,themax2,bamboo),cex.axis=1.5,las=1,tick=F)
         if(k==Nenviron)axis(1, at=ticks,cex.axis=1.5,line=0.001,labels=chm.to.analyze,tick=F)
-        mtext(side=4,paste(environ_name[k],sep=""),line=2,cex=1,base_family="Arial")
+        mtext(side=4,paste(environ_name[k],sep=""),line=2,cex=1)
  box()
  }#end of environ_name
  dev.off()
@@ -519,9 +793,20 @@ if("s"%in%plot.type)
     step.vals=ceiling(k/length(allpch0))-1
 
     environ_result=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[k],".csv",sep=""),head=T)
-    result=environ_result[,1:4]
-    result=result[order(result[,3]),]
-    result=result[order(result[,2]),]
+    environ_result=.gpp_extract_gwas_result(environ_result)
+    result=environ_result
+    .gpp_s0_map <- .gpp_map_xy(result[, 2])
+    keep_s0 <- which(is.finite(.gpp_s0_map$mapped) & !is.na(result[,3]) & !is.na(result[,4]))
+    if (length(keep_s0) < nrow(result)) {
+      result <- result[keep_s0, , drop=FALSE]
+      .gpp_s0_map$mapped <- .gpp_s0_map$mapped[keep_s0]
+    }
+    result_s0_ord <- order(result[, 3])
+    result <- result[result_s0_ord, , drop=FALSE]
+    .gpp_s0_map$mapped <- .gpp_s0_map$mapped[result_s0_ord]
+    result_s0_ord2 <- order(.gpp_s0_map$mapped)
+    result <- result[result_s0_ord2, , drop=FALSE]
+    .gpp_s0_map$mapped <- .gpp_s0_map$mapped[result_s0_ord2]
     result=result[match(as.character(GM[,1]),as.character(result[,1])),]
     rownames(result)=seq_len(nrow(result))
     GI.MP=result[,c(2:4)]
@@ -536,8 +821,10 @@ if("s"%in%plot.type)
     #Retain SNPs that have P values between 0 and 1 (not na etc)
     GI.MP <- GI.MP[GI.MP[,3]>0,]
     GI.MP <- GI.MP[GI.MP[,3]<=1,]
-    #Remove chr 0 and 99
-    GI.MP <- GI.MP[GI.MP[,1]!=0,]
+    #Remove chr 0 only (preserve X/Y/99 etc non-zero non-standard chromosomes)
+    zero_s1_chr <- suppressWarnings(as.numeric(as.character(GI.MP[,1])))
+    zero_s1_mask <- is.finite(zero_s1_chr) & zero_s1_chr == 0
+    GI.MP <- GI.MP[!zero_s1_mask,,drop=FALSE]
     total_chromo=length(unique(GI.MP[,1]))
     # print(dim(GI.MP))
     if(!is.null(seqQTN))GI.MP[seqQTN,borrowSlot]=1
@@ -547,11 +834,14 @@ if("s"%in%plot.type)
     GI.MP[,5]=1:numMarker
     y.lim <- ceiling(max(GI.MP[,3]))
     
-    chm.to.analyze <- unique(GI.MP[,1])
-    # print(chm.to.analyze)
-    # chm.to.analyze=chm.to.analyze[order(chm.to.analyze)]
-    nchr=length(chm.to.analyze)
-    # print(chm.to.analyze)
+    .gpp_s1_map <- .gpp_map_xy(GI.MP[,1])
+    .local_chr = as.character(unique(GI.MP[,1]))
+    .merged_chr = unique(c(as.character(.chm_to_analyze), .local_chr))
+    .map_merged = .gpp_map_xy(.merged_chr)
+    chm.to.analyze = .merged_chr[order(.map_merged$mapped)]
+    nchr = length(chm.to.analyze)
+    GI.MP_order_chr <- .gpp_s1_map$mapped
+    GI.MP <- GI.MP[order(GI.MP_order_chr, GI.MP[,2]), ]
     GI.MP[,6]=1:(nrow(GI.MP))
     MP_store=GI.MP
     index_GI=MP_store[,3]>=0
@@ -568,22 +858,11 @@ if("s"%in%plot.type)
         
     x0 <- as.numeric(MP_store[,2])
     y0 <- as.numeric(MP_store[,3])
-    z0 <- as.character(MP_store[,1])
-       # convert chromosome character to number
-       chor_taxa=as.character(unique(MP_store[,1]))
-       chor_taxa=chor_taxa[order(as.numeric(as.character(chor_taxa)))]
-       chr_letter=grep("[A-Z]|[a-z]",chor_taxa)
-       if(!setequal(integer(0),chr_letter))
-         {     
-           z0=as.character(MP_store[,1])
-           for(i in 1:(length(chor_taxa)))
-              {
-                index=z0==chor_taxa[i]
-                z0[index]=i    
-              }
-          }
-       z0=as.numeric(z0)
-       max.x=NULL
+    chor_taxa <- as.character(chm.to.analyze)
+    chor_to_z <- setNames(seq_along(chor_taxa), chor_taxa)
+    z0 <- as.numeric(chor_to_z[as.character(MP_store[,1])])
+    if(anyNA(z0)) z0[is.na(z0)] <- 1L
+    max.x=NULL
     for (i in chm.to.analyze)
         {
             index=(MP_store[,1]==i)
@@ -772,7 +1051,7 @@ print("GAPIT.Association.Manhattans has done !!!")
 return(list(multip_mapP=result0,xz=new_xz))
 } #end of GAPIT.Manhattan
 #=============================================================================================
-GPP.Circle.Manhattan.Plot <-function(model_store,Y.names=NULL,environ_name=NULL,QTN.position=NULL,cutOff=0.05,byTraits=FALSE)
+GPP.Circle.Manhattan.Plot <-function(model_store,Y.names=NULL,environ_name=NULL,QTN.position=NULL,cutOff=0.05,byTraits=FALSE,plot.style="MarineBreeze")
     {
 if(byTraits)
 {
@@ -792,13 +1071,98 @@ if(byTraits)
      }
   }
 }
+.local_extract <- function(path) {
+  df <- tryCatch(read.csv(path, head = TRUE, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  cn <- colnames(df)
+  cn <- trimws(cn)
+  cn <- sub("^\ufeff", "", cn)
+  cn <- sub("^ï\\.\\.", "", cn)
+  cn <- gsub("[[:space:][:cntrl:]]+", "", cn)
+  cn_norm <- gsub("[^a-z0-9]+", "_", tolower(cn))
+  cn_norm <- gsub("_+", "_", cn_norm)
+  cn_norm <- gsub("^_+|_+$", "", cn_norm)
+  pick_col <- function(norm_names, candidates) {
+    idx <- which(norm_names %in% candidates)
+    if (length(idx) >= 1) return(idx[1])
+    integer(0)
+  }
+  to_num <- function(x) suppressWarnings(as.numeric(x))
+  clean_chr <- function(ch) {
+    ch <- as.character(ch)
+    ch <- trimws(ch)
+    ch <- sub("^\ufeff", "", ch)
+    ch <- sub("^ï\\.\\.", "", ch)
+    ch <- gsub("[[:space:][:cntrl:]]+", "", ch)
+    num_ch <- suppressWarnings(as.numeric(ch))
+    not_missing = !is.na(ch) & nzchar(ch)
+    has_non_numeric_label = any(not_missing & is.na(num_ch))
+    if (has_non_numeric_label) {
+      return(ch)
+    }
+    all_int = if (any(not_missing)) {
+      all(is.finite(num_ch[not_missing]) & (num_ch[not_missing] == round(num_ch[not_missing])))
+    } else TRUE
+    if (all_int) {
+      return(num_ch)
+    }
+    ch
+  }
+  snp_idx <- pick_col(cn_norm, c("snp", "rs", "rsid", "marker", "id"))
+  chr_idx <- pick_col(cn_norm, c("chr", "chrom", "chromosome"))
+  pos_idx <- pick_col(cn_norm, c("pos", "position", "bp", "bp_position"))
+  if (length(snp_idx) < 1) snp_idx <- 1
+  if (length(chr_idx) < 1) chr_idx <- 2
+  if (length(pos_idx) < 1) pos_idx <- 3
+  data.frame(
+    SNP = as.character(df[[snp_idx]]),
+    Chr = clean_chr(df[[chr_idx]]),
+    Pos = to_num(df[[pos_idx]]),
+    stringsAsFactors = FALSE
+  )
+}
+gm_list <- list()
 for(i in 1:length(environ_name))
 {
   print(paste("Reading GWAS result with ",environ_name[i],sep=""))
-  GWAS_Results=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[i],".csv",sep=""),head=T)
-} 
-GMM=GAPIT.Multiple.Manhattan(model_store=model_store,Y.names=Y.names,GM=GWAS_Results[,c(1:3)],seqQTN=QTN.position,cutOff=cutOff,plot.type=c("w","h"))
-GPP.Circle.Manhattan.Plot.Core(Pmap=GMM$multip_mapP,band=1,r=3,plot.type=c("c","q"),signal.line=1,xz=GMM$xz,threshold=cutOff)
+  fpath <- paste("GAPIT.Association.GWAS_Results.",environ_name[i],".csv",sep="")
+  df <- .local_extract(fpath)
+  if (!is.null(df) && nrow(df) > 0) gm_list[[length(gm_list)+1]] <- df
+}
+if (length(gm_list) == 0) {
+  stop("No valid GWAS result files found for GM construction.")
+}
+all_gm <- do.call(rbind, gm_list)
+all_gm <- all_gm[!duplicated(all_gm$SNP), , drop=FALSE]
+all_gm <- all_gm[!is.na(all_gm$SNP) & all_gm$SNP != "", , drop=FALSE]
+all_gm <- all_gm[!is.na(all_gm$Pos), , drop=FALSE]
+all_gm <- all_gm[order(all_gm$Pos), , drop=FALSE]
+.gm_map <- (function() {
+  chr_vec_c <- as.character(all_gm$Chr)
+  options(warn = -1)
+  numeric.chr <- suppressWarnings(as.numeric(chr_vec_c))
+  options(warn = 0)
+  max.chr <- suppressWarnings(max(numeric.chr, na.rm = TRUE))
+  if (!is.finite(max.chr)) max.chr <- 0
+  map.xy.index <- which(!(numeric.chr %in% c(0:max.chr)))
+  chr.xy <- character(0)
+  if (length(map.xy.index) != 0) {
+    chr.xy <- unique(chr_vec_c[map.xy.index])
+    for (k in seq_along(chr.xy)) {
+      chr_vec_c[chr_vec_c == chr.xy[k]] <- max.chr + k
+    }
+  }
+  list(
+    mapped = suppressWarnings(as.numeric(chr_vec_c)),
+    chr.xy = chr.xy,
+    max.chr = max.chr
+  )
+})()
+ord1 <- order(.gm_map$mapped, all_gm$Pos, na.last = NA)
+all_gm <- all_gm[ord1, , drop=FALSE]
+GM <- all_gm
+GMM=GAPIT.Multiple.Manhattan(model_store=model_store,Y.names=Y.names,GM=GM,seqQTN=QTN.position,cutOff=cutOff,plot.type=c("w","h","s"))
+GPP.Circle.Manhattan.Plot.Core(Pmap=GMM$multip_mapP,band=1,r=3,plot.type=c("c","q"),signal.line=1,xz=GMM$xz,threshold=cutOff,plot.style=plot.style)
 return(GMM)
 }
 
@@ -940,6 +1304,7 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 	Pmap,
 	col=c("#377EB8", "#4DAF4A", "#984EA3", "#FF7F00"),
 	#col=c("darkgreen", "darkblue", "darkyellow", "darkred"),
+	plot.style = c("Oceanic", "Rainbow", "FarmCPU", "Rushville", "Congress", "Ocean", "PLINK", "Beach", "MarineBreeze", "cougars"),
 	
 	bin.size=1e6,
 	bin.max=NULL,
@@ -987,10 +1352,74 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 )
 {		#print("Starting Circular-Manhattan plot!",quote=F)
 	taxa=colnames(Pmap)[-c(1:3)]
+	# --- Clean taxa labels: remove .x/.y/P.value/P.value.x/P.value.y artifacts ---
+	if (length(taxa) > 0) {
+	  bad_pattern <- "^(P\\.value|pvalue|p_value|pval)(\\.x|\\.y)?$"
+	  # Remove any name that looks like a pure p-value column
+	  keep_idx <- which(!grepl(bad_pattern, taxa, ignore.case = TRUE))
+	  if (length(keep_idx) > 0) {
+	    taxa <- taxa[keep_idx]
+	    # Also strip trailing .x/.y just in case
+	    taxa <- sub("\\.x$", "", taxa, ignore.case = TRUE)
+	    taxa <- sub("\\.y$", "", taxa, ignore.case = TRUE)
+	  }
+	  # If after filtering there are no good names, fall back
+	  if (length(taxa) == 0) taxa <- paste0("Trait_", seq_len(length(colnames(Pmap)[-c(1:3)])))
+	}
 	if(!is.null(memo) && memo != "")	memo <- paste("_", memo, sep="")
 	if(length(taxa) == 0)	taxa <- "Index"
 	taxa <- paste(taxa, memo, sep="")
-    col=rep(c( '#FF6A6A',    '#FAC863',  '#99C794',    '#6699CC',  '#C594C5'),ceiling(length(taxa)/5))
+
+	# --- Apply plot.style chromosome colors (MarineBreeze etc) ---
+	if (missing(plot.style) || is.null(plot.style) || length(plot.style) > 1) {
+		plot.style <- plot.style[1]
+	}
+    {
+        options(warn = -1)
+        numeric.chr_p <- suppressWarnings(as.numeric(as.character(Pmap[, 1])))
+        options(warn = 0)
+        max.chr_p <- suppressWarnings(max(numeric.chr_p, na.rm = TRUE))
+        if (!is.finite(max.chr_p)) max.chr_p <- 0
+        map.xy.index_p <- which(!(numeric.chr_p %in% c(0:max.chr_p)))
+        chr_p <- as.character(Pmap[, 1])
+        if (length(map.xy.index_p) != 0) {
+            chr.xy_p <- unique(chr_p[map.xy.index_p])
+            for (i in seq_along(chr.xy_p)) {
+                chr_p[chr_p == chr.xy_p[i]] <- max.chr_p + i
+            }
+        }
+        chr_p_numeric <- suppressWarnings(as.numeric(chr_p))
+    }
+	nchr_p <- length(unique(chr_p_numeric))
+	col_Rainbow <- grDevices::rainbow(max(2, nchr_p + 1))
+	col_FarmCPU <- rep(c("#CC6600","deepskyblue","orange","forestgreen","indianred3"), ceiling(nchr_p/5))
+	col_Rushville <- rep(c("orangered","navyblue"), ceiling(nchr_p/2))
+	col_Congress <- rep(c("deepskyblue3","firebrick"), ceiling(nchr_p/2))
+	col_Ocean <- rep(c("steelblue4","cyan3"), ceiling(nchr_p/2))
+	col_PLINK <- rep(c("gray10","gray70"), ceiling(nchr_p/2))
+	col_Beach <- rep(c("turquoise4","indianred3","darkolivegreen3","red","aquamarine3","darkgoldenrod"), ceiling(nchr_p/5))
+	col_Oceanic <- rep(c('#EC5f67','#FAC863','#99C794','#6699CC','#C594C5'), ceiling(nchr_p/5))
+	col_MarineBreeze <- rep(c("#BFDFD2","#51999F","#4198AC","#7BC0CD","#DBCB92","#ECB66C","#EA9E58","#ED8D5A"), ceiling(nchr_p/8))
+	col_cougars <- rep(c('#990000','dimgray'), ceiling(nchr_p/2))
+	plot_color <- NULL
+	if (plot.style == "Rainbow") plot_color <- col_Rainbow
+	if (plot.style == "FarmCPU") plot_color <- col_FarmCPU
+	if (plot.style == "Rushville") plot_color <- col_Rushville
+	if (plot.style == "Congress") plot_color <- col_Congress
+	if (plot.style == "Ocean") plot_color <- col_Ocean
+	if (plot.style == "PLINK") plot_color <- col_PLINK
+	if (plot.style == "Beach") plot_color <- col_Beach
+	if (plot.style == "Oceanic") plot_color <- col_Oceanic
+	if (plot.style == "MarineBreeze") plot_color <- col_MarineBreeze
+	if (plot.style == "cougars") plot_color <- col_cougars
+	if (!is.null(plot_color)) {
+		col <- plot_color
+	} else {
+		# Default legacy colors (one track)
+		col <- rep(c('#FF6A6A','#FAC863','#99C794','#6699CC','#C594C5'), ceiling(length(taxa)/5))
+	}
+	# --- End plot.style colors ---
+
     legend.bit=round(nrow(Pmap)/30)
 
     numeric.chr <- as.numeric(Pmap[, 1])
@@ -1776,12 +2205,19 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 			for(i in 1:R){
 				print(paste("Multracks_QQ Plotting ",taxa[i],"...",sep=""))		
 				P.values=as.numeric(Pmap[,i+2])
-				P.values=P.values[!is.na(P.values)]
+				# --- Robust cleanup for QQ (outcome217 style artifacts) ---
+				P.values <- P.values[is.finite(P.values)]
+				P.values <- P.values[!is.na(P.values)]
+				P.values <- P.values[P.values > 0 & P.values < 1]
+				if (length(P.values) < 10) {
+				  P.values <- as.numeric(Pmap[,i+2])
+				  P.values <- P.values[!is.na(P.values) & is.finite(P.values)]
+				  P.values <- pmax(P.values, 1e-300)
+				  P.values <- pmin(P.values, 1 - 1e-16)
+				}
 				if(LOG10){
-					P.values=P.values[P.values>0]
-					P.values=P.values[P.values<=1]
-					N=length(P.values)
 					P.values=P.values[order(P.values)]
+					N=length(P.values)
 				}else{
 					N=length(P.values)
 					P.values=P.values[order(P.values,decreasing=TRUE)]
@@ -1793,10 +2229,16 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 				}else{
 					log.P.values <- P.values
 				}
+				# --- Official GAPIT lambda (gapit_functions.txt line 15595):
+				#     lambda.estimated = median(P.values) / median(p_value_quantiles)
+				# Do NOT de-duplicate (matches classic GAPIT GAPIT.QQ exactly)
 				lambda <- NA_real_
 				if(length(P.values) > 0){
-					chi2 <- stats::qchisq(1 - P.values, df = 1)
-					lambda <- stats::median(chi2, na.rm = TRUE) / stats::qchisq(0.5, df = 1)
+				  med_p <- stats::median(as.numeric(P.values), na.rm = TRUE)
+				  med_q <- stats::median(as.numeric(p_value_quantiles), na.rm = TRUE)
+				  if (is.finite(med_p) && is.finite(med_q) && med_q > 0) {
+				    lambda <- med_p / med_q
+				  }
 				}
 				
 				#calculate the confidence interval of QQ-plot
@@ -1816,7 +2258,13 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 					c95 <- 1
 				}
 				
-				YlimMax <- max(floor(max(max(-log10(c05)), max(-log10(c95)))+1), floor(max(log.P.values)+1))
+				# Robust Y limit (avoid top-whisker blowing up)
+				ylow_ci <- suppressWarnings(max(-log10(c05), -log10(c95), na.rm = TRUE))
+				if (!is.finite(ylow_ci)) ylow_ci <- 0
+				yobs_p999 <- stats::quantile(log.P.values, probs = 0.999, na.rm = TRUE)
+				yobs_max <- max(log.P.values, na.rm = TRUE)
+				YlimMax <- max(floor(ylow_ci + 1), floor(max(yobs_p999, yobs_max) + 1))
+				if (!is.finite(YlimMax) || YlimMax < 1) YlimMax <- 10
 				plot(NULL, xlim = c(0,floor(max(log.Quantiles)+1)), axes=FALSE, cex.axis=cex.axis, cex.lab=1.2,ylim=c(0,YlimMax),xlab ="", ylab="", main = taxa[i])
 				if(!is.na(lambda)){
 					usr <- graphics::par("usr")
@@ -1879,10 +2327,17 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 					graphics::par(xpd=TRUE)
 				}
 				P.values=as.numeric(Pmap[,i+2])
-				P.values=P.values[!is.na(P.values)]
+				# --- Robust cleanup for QQ (outcome217 style artifacts) ---
+				P.values <- P.values[is.finite(P.values)]
+				P.values <- P.values[!is.na(P.values)]
+				P.values <- P.values[P.values > 0 & P.values < 1]
+				if (length(P.values) < 10) {
+				  P.values <- as.numeric(Pmap[,i+2])
+				  P.values <- P.values[!is.na(P.values) & is.finite(P.values)]
+				  P.values <- pmax(P.values, 1e-300)
+				  P.values <- pmin(P.values, 1 - 1e-16)
+				}
 				if(LOG10){
-					P.values=P.values[P.values>0]
-					P.values=P.values[P.values<=1]
 					N=length(P.values)
 					P.values=P.values[order(P.values)]
 				}else{
@@ -1910,7 +2365,16 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 				
 				Pmap.min <- Pmap[,3:(R+2)]
 
-				YlimMax <- max(floor(max(max(-log10(c05)), max(-log10(c95)))+1), -log10(min(Pmap.min[Pmap.min > 0])))
+				ylow_ci <- suppressWarnings(max(-log10(c05), -log10(c95), na.rm = TRUE))
+				if (!is.finite(ylow_ci)) ylow_ci <- 0
+				pos_vals <- suppressWarnings(-log10(Pmap.min[Pmap.min > 0 & Pmap.min < 1]))
+				if (length(pos_vals) > 0 && is.finite(max(pos_vals, na.rm = TRUE))) {
+				  yobs_p999 <- stats::quantile(pos_vals, probs = 0.999, na.rm = TRUE)
+				  YlimMax <- max(floor(ylow_ci + 1), floor(max(yobs_p999, max(pos_vals, na.rm = TRUE)) + 1))
+				} else {
+				  YlimMax <- max(floor(ylow_ci + 1), 10)
+				}
+				if (!is.finite(YlimMax) || YlimMax < 1) YlimMax <- 10
 				plot(NULL, xlim = c(0,floor(max(log.Quantiles)+1)), axes=FALSE, cex.axis=cex.axis, cex.lab=1.2,ylim=c(0, floor(YlimMax+1)),xlab =expression(Expected~~-log[10](italic(p))), ylab = expression(Observed~~-log[10](italic(p))), main = "QQ plot")
 				#legend("topleft",taxa,col=t(col)[1:R],pch=1,pt.lwd=2,text.font=6,box.col=NA)			
 				graphics::legend("topleft",taxa,col=qq_col[1:R],pch=1,pt.lwd=3,text.font=6,box.col=NA)
@@ -1926,10 +2390,17 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 				for(i in 1:R){
 					#print(paste("Multraits_QQ Plotting ",taxa[i],"...",sep=""))
 					P.values=as.numeric(Pmap[,i+2])
-				    P.values=P.values[!is.na(P.values)]
+					# --- Robust cleanup for QQ (outcome217 style artifacts) ---
+					P.values <- P.values[is.finite(P.values)]
+					P.values <- P.values[!is.na(P.values)]
+					P.values <- P.values[P.values > 0 & P.values < 1]
+					if (length(P.values) < 10) {
+					  P.values <- as.numeric(Pmap[,i+2])
+					  P.values <- P.values[!is.na(P.values) & is.finite(P.values)]
+					  P.values <- pmax(P.values, 1e-300)
+					  P.values <- pmin(P.values, 1 - 1e-16)
+					}
 				    if(LOG10){
-					P.values=P.values[P.values>0]
-					P.values=P.values[P.values<=1]
 					N=length(P.values)
 					P.values=P.values[order(P.values)]
 				    }else{
@@ -1982,10 +2453,17 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 
 			for(iqq in 1:R){
 				P.values=as.numeric(Pmap[,iqq+2])
-				P.values=P.values[!is.na(P.values)]
+				# --- Robust cleanup for QQ (outcome217 style artifacts) ---
+				P.values <- P.values[is.finite(P.values)]
+				P.values <- P.values[!is.na(P.values)]
+				P.values <- P.values[P.values > 0 & P.values < 1]
+				if (length(P.values) < 10) {
+				  P.values <- as.numeric(Pmap[,iqq+2])
+				  P.values <- P.values[!is.na(P.values) & is.finite(P.values)]
+				  P.values <- pmax(P.values, 1e-300)
+				  P.values <- pmin(P.values, 1 - 1e-16)
+				}
 				if(LOG10){
-					P.values=P.values[P.values>0]
-					P.values=P.values[P.values<=1]
 					N=length(P.values)
 					P.values=P.values[order(P.values)]
 				}else{
@@ -2000,10 +2478,16 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 					log.P.values <- P.values
 				}
 
+				# --- Official GAPIT lambda (gapit_functions.txt line 15595):
+				#     lambda.estimated = median(P.values) / median(p_value_quantiles)
+				# Do NOT de-duplicate (matches classic GAPIT GAPIT.QQ exactly)
 				lambda <- NA_real_
 				if(length(P.values) > 0){
-					chi2 <- stats::qchisq(1 - P.values, df = 1)
-					lambda <- stats::median(chi2, na.rm = TRUE) / stats::qchisq(0.5, df = 1)
+				  med_p <- stats::median(as.numeric(P.values), na.rm = TRUE)
+				  med_q <- stats::median(as.numeric(p_value_quantiles), na.rm = TRUE)
+				  if (is.finite(med_p) && is.finite(med_q) && med_q > 0) {
+				    lambda <- med_p / med_q
+				  }
 				}
 
 				if(conf.int){
@@ -2022,7 +2506,12 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 					c95 <- 1
 				}
 
-				YlimMax <- max(floor(max(max(-log10(c05)), max(-log10(c95)))+1), floor(max(log.P.values)+1))
+				ylow_ci <- suppressWarnings(max(-log10(c05), -log10(c95), na.rm = TRUE))
+				if (!is.finite(ylow_ci)) ylow_ci <- 0
+				yobs_p999 <- stats::quantile(log.P.values, probs = 0.999, na.rm = TRUE)
+				yobs_max <- max(log.P.values, na.rm = TRUE)
+				YlimMax <- max(floor(ylow_ci + 1), floor(max(yobs_p999, yobs_max) + 1))
+				if (!is.finite(YlimMax) || YlimMax < 1) YlimMax <- 10
 				if(file.output){
 					if(file=="jpg")	grDevices::jpeg(paste0("GAPIT.Association.QQ.",taxa[iqq],".jpg"), width = 5.5*dpi,height=5.5*dpi,res=dpi,quality = 100)
 					if(file=="pdf"){
@@ -2080,10 +2569,17 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 					graphics::par(xpd=TRUE)
 				}
 				P.values=as.numeric(Pmap[,i+2])
-				P.values=P.values[!is.na(P.values)]
+				# --- Robust cleanup for QQ (outcome217 style artifacts) ---
+				P.values <- P.values[is.finite(P.values)]
+				P.values <- P.values[!is.na(P.values)]
+				P.values <- P.values[P.values > 0 & P.values < 1]
+				if (length(P.values) < 10) {
+				  P.values <- as.numeric(Pmap[,i+2])
+				  P.values <- P.values[!is.na(P.values) & is.finite(P.values)]
+				  P.values <- pmax(P.values, 1e-300)
+				  P.values <- pmin(P.values, 1 - 1e-16)
+				}
 				if(LOG10){
-					P.values=P.values[P.values>0]
-					P.values=P.values[P.values<=1]
 					N=length(P.values)
 					P.values=P.values[order(P.values)]
 				}else{
@@ -2097,10 +2593,16 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 				}else{
 					log.P.values <- P.values
 				}
+				# --- Official GAPIT lambda (gapit_functions.txt line 15595):
+				#     lambda.estimated = median(P.values) / median(p_value_quantiles)
+				# Do NOT de-duplicate (matches classic GAPIT GAPIT.QQ exactly)
 				lambda <- NA_real_
 				if(length(P.values) > 0){
-					chi2 <- stats::qchisq(1 - P.values, df = 1)
-					lambda <- stats::median(chi2, na.rm = TRUE) / stats::qchisq(0.5, df = 1)
+				  med_p <- stats::median(as.numeric(P.values), na.rm = TRUE)
+				  med_q <- stats::median(as.numeric(p_value_quantiles), na.rm = TRUE)
+				  if (is.finite(med_p) && is.finite(med_q) && med_q > 0) {
+				    lambda <- med_p / med_q
+				  }
 				}
 				
 				#calculate the confidence interval of QQ-plot
@@ -2119,9 +2621,13 @@ GPP.Circle.Manhattan.Plot.Core <- function(
 					c05 <- 1
 					c95 <- 1
 				}
-				#print(max(log.Quantiles))
-				#print("@@@@@")
-				YlimMax <- max(floor(max(max(-log10(c05)), max(-log10(c95)))+1), floor(max(log.P.values)+1))
+				# Robust Y limit
+				ylow_ci <- suppressWarnings(max(-log10(c05), -log10(c95), na.rm = TRUE))
+				if (!is.finite(ylow_ci)) ylow_ci <- 0
+				yobs_p999 <- stats::quantile(log.P.values, probs = 0.999, na.rm = TRUE)
+				yobs_max <- max(log.P.values, na.rm = TRUE)
+				YlimMax <- max(floor(ylow_ci + 1), floor(max(yobs_p999, yobs_max) + 1))
+				if (!is.finite(YlimMax) || YlimMax < 1) YlimMax <- 10
 				plot(NULL, xlim = c(0,floor(max(log.Quantiles)+1)), axes=FALSE, cex.axis=cex.axis, cex.lab=1.2,ylim=c(0,YlimMax),xlab =expression(Expected~~-log[10](italic(p))), ylab = expression(Observed~~-log[10](italic(p))), main = paste("QQplot of",taxa[i]))
 				if(!is.na(lambda)){
 					usr <- graphics::par("usr")
