@@ -181,6 +181,63 @@ if(plot.style =="Beach")plot.color= col.Beach
 if(plot.style =="Oceanic")plot.color= col.Oceanic
 if(plot.style =="cougars")plot.color= col.cougars  
 
+if (!exists("GPP.extract.GWAS.result", mode = "function")) {
+GPP.extract.GWAS.result <- function(environ_result) {
+  df <- environ_result
+  cn <- colnames(df)
+  cn_norm <- tolower(gsub("[^a-z0-9]+", "_", cn))
+  pick_col <- function(norm_names, candidates) {
+    idx <- which(norm_names %in% candidates)
+    if (length(idx) >= 1) return(idx[1])
+    integer(0)
+  }
+  to_num <- function(x) suppressWarnings(as.numeric(x))
+  snp_idx <- pick_col(cn_norm, c("snp", "rs", "rsid", "marker", "id"))
+  chr_idx <- pick_col(cn_norm, c("chr", "chrom", "chromosome"))
+  pos_idx <- pick_col(cn_norm, c("pos", "position", "bp", "bp_position"))
+  p_candidates <- unique(c(which(grepl("^trait_", cn_norm)), which(cn_norm %in% c("p", "p_value", "pvalue", "pval", "p.value", "p_wald", "p_value_wald"))))
+  p_candidates <- setdiff(p_candidates, which(cn_norm %in% c("maf", "effect", "se", "stderr", "beta", "nobs")))
+  pick_p <- function(df, idxs) {
+    if (length(idxs) < 1) return(integer(0))
+    scores01 <- rep(-Inf, length(idxs))
+    scorespos <- rep(-Inf, length(idxs))
+    for (i in seq_along(idxs)) {
+      v <- to_num(df[[idxs[i]]])
+      ok01 <- is.finite(v) & v > 0 & v <= 1
+      okpos <- is.finite(v) & v > 0
+      scores01[i] <- sum(ok01)
+      scorespos[i] <- sum(okpos)
+    }
+    if (max(scores01, na.rm = TRUE) > 0) return(idxs[which.max(scores01)])
+    if (max(scorespos, na.rm = TRUE) > 0) return(idxs[which.max(scorespos)])
+    integer(0)
+  }
+  p_idx <- pick_p(df, p_candidates)
+  if (length(p_idx) < 1) {
+    num_cols <- which(vapply(df, function(x) is.numeric(suppressWarnings(as.numeric(x))), logical(1)))
+    p_idx <- pick_p(df, setdiff(num_cols, which(cn_norm %in% c("maf", "effect", "se", "stderr", "beta", "nobs"))))
+  }
+  if (length(chr_idx) < 1 || length(pos_idx) < 1 || length(p_idx) < 1) {
+    stop("Cannot find required columns (Chr/Pos/P) in GWAS result.")
+  }
+  out <- data.frame(
+    SNP = if (length(snp_idx) >= 1) as.character(df[[snp_idx]]) else df[[1]],
+    Chr = df[[chr_idx]],
+    Pos = df[[pos_idx]],
+    P.value = df[[p_idx]],
+    stringsAsFactors = FALSE
+  )
+  out$Chr <- suppressWarnings(as.numeric(as.character(out$Chr)))
+  out$Pos <- to_num(out$Pos)
+  p <- to_num(out$P.value)
+  if (sum(is.finite(p) & p > 0 & p <= 1) == 0 && sum(is.finite(p) & p > 0) > 0 && stats::median(p, na.rm = TRUE) > 1) {
+    p <- 10^(-p)
+  }
+  out$P.value <- p
+  out
+}
+}
+
 if("h"%in%plot.type)
 {
     Max.high=6*Nenviron
@@ -199,8 +256,8 @@ if("h"%in%plot.type)
             #par(mfrow=c(Nenviron,1))
         par(mar = c(1.5,8,0.5,8))    
         }
-       environ_result=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[k],".csv",sep=""),head=T)
-       result=environ_result[,1:4]
+      environ_result=read.csv(paste("GAPIT.Association.GWAS_Results.",environ_name[k],".csv",sep=""),head=T)
+      result=GPP.extract.GWAS.result(environ_result)
        result=result[order(result[,3]),]
        result=result[order(result[,2]),]
        result=result[match(as.character(GM[,1]),as.character(result[,1])),]
