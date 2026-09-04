@@ -1,3 +1,69 @@
+GPP.GWAS.Normalize.Chr <- function(x, style = c("plain", "chr")) {
+  style <- match.arg(style)
+  x0 <- trimws(as.character(x))
+  x0 <- sub("^chromosome", "", x0, ignore.case = TRUE)
+  x0 <- sub("^chrom", "", x0, ignore.case = TRUE)
+  x0 <- sub("^chr", "", x0, ignore.case = TRUE)
+  x0 <- trimws(x0)
+  x0[x0 == ""] <- NA_character_
+  if (style == "chr") {
+    x0[!is.na(x0)] <- paste0("chr", x0[!is.na(x0)])
+  }
+  x0
+}
+
+GPP.GWAS.Annotation.Cache <- local({
+  cache_env <- new.env(parent = emptyenv())
+  function(annot) {
+    if (!is.character(annot) || length(annot) != 1) return(NULL)
+    annot_path <- normalizePath(as.character(annot), winslash = "\\", mustWork = TRUE)
+    info <- file.info(annot_path)
+    key <- paste(annot_path, info$size, as.numeric(info$mtime), sep = "|")
+    if (exists(key, envir = cache_env, inherits = FALSE)) {
+      return(get(key, envir = cache_env, inherits = FALSE))
+    }
+    ext <- tolower(tools::file_ext(annot_path))
+    ann <- NULL
+    if (ext %in% c("gtf", "gff", "gff3")) {
+      ann <- tryCatch({
+        if (requireNamespace("data.table", quietly = TRUE)) {
+          tmp <- data.table::fread(annot_path, sep = "\t", header = FALSE, stringsAsFactors = FALSE, select = c(1, 3, 4, 5, 9))
+          tmp <- tmp[tmp[[2]] == "gene", ]
+          g_id <- sapply(tmp[[5]], function(x) {
+            m <- regexpr("gene_name\\s+\"([^\"]+)\"", x)
+            if (m == -1) m <- regexpr("gene_id\\s+\"([^\"]+)\"", x)
+            if (m != -1) sub(".*\"([^\"]+)\".*", "\\1", regmatches(x, m)) else NA_character_
+          })
+          data.frame(CHR = GPP.GWAS.Normalize.Chr(tmp[[1]], style = "plain"), START = tmp[[3]], END = tmp[[4]], Gene = g_id, stringsAsFactors = FALSE)
+        } else {
+          tmp <- utils::read.table(annot_path, sep = "\t", header = FALSE, stringsAsFactors = FALSE, quote = "")
+          tmp <- tmp[tmp[, 3] == "gene", ]
+          g_id <- sapply(tmp[, 9], function(x) {
+            m <- regexpr("gene_name\\s+\"([^\"]+)\"", x)
+            if (m == -1) m <- regexpr("gene_id\\s+\"([^\"]+)\"", x)
+            if (m != -1) sub(".*\"([^\"]+)\".*", "\\1", regmatches(x, m)) else NA_character_
+          })
+          data.frame(CHR = GPP.GWAS.Normalize.Chr(tmp[, 1], style = "plain"), START = as.numeric(tmp[, 4]), END = as.numeric(tmp[, 5]), Gene = g_id, stringsAsFactors = FALSE)
+        }
+      }, error = function(e) NULL)
+      if (!is.null(ann) && nrow(ann) > 0) {
+        ann$CHR <- GPP.GWAS.Normalize.Chr(ann$CHR, style = "plain")
+        ann <- ann[!is.na(ann$Gene) & ann$Gene != "", , drop = FALSE]
+        ann <- ann[!is.na(ann$CHR) & ann$CHR != "", , drop = FALSE]
+      }
+    } else {
+      ann <- tryCatch(
+        {
+          if (ext %in% c("csv")) utils::read.csv(annot_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE) else utils::read.table(annot_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+        },
+        error = function(e) NULL
+      )
+    }
+    assign(key, ann, envir = cache_env)
+    ann
+  }
+})
+
 GPP.GWAS.Read.Manhattan <- function(path, trait = NULL, software = NULL, model = NULL) {
   if (is.null(path) || length(path) != 1) stop("path must be a single file path.")
   path <- normalizePath(as.character(path), winslash = "\\", mustWork = TRUE)
@@ -133,7 +199,7 @@ GPP.GWAS.Read.Manhattan <- function(path, trait = NULL, software = NULL, model =
     P = df[[p_idx]],
     stringsAsFactors = FALSE
   )
-  out$CHR <- as.character(out$CHR)
+  out$CHR <- GPP.GWAS.Normalize.Chr(out$CHR, style = "plain")
   out$BP <- to_num(out$BP)
   out$P <- to_num(out$P)
   out$Software <- software
@@ -147,6 +213,7 @@ GPP.GWAS.Read.Manhattan <- function(path, trait = NULL, software = NULL, model =
 
 GPP.GWAS.Significant.Table <- function(dat,
                                       cut_off = 0.05,
+                                      bonferroni = NULL,
                                       max_per_chr = 1,
                                       label_priority = c("Gene", "SNP"),
                                       annot = NULL,
@@ -159,64 +226,48 @@ GPP.GWAS.Significant.Table <- function(dat,
   if (!is.null(annot)) {
     ann <- annot
     if (is.character(ann) && length(ann) == 1) {
-      ext <- tolower(tools::file_ext(ann))
-      if (ext %in% c("gtf", "gff", "gff3")) {
-        ann <- tryCatch({
-          if (requireNamespace("data.table", quietly = TRUE)) {
-            tmp <- data.table::fread(ann, sep = "\t", header = FALSE, stringsAsFactors = FALSE, select = c(1, 3, 4, 5, 9))
-            tmp <- tmp[tmp[[2]] == "gene", ]
-            g_id <- sapply(tmp[[5]], function(x) {
-              m <- regexpr("gene_name\\s+\"([^\"]+)\"", x)
-              if (m == -1) m <- regexpr("gene_id\\s+\"([^\"]+)\"", x)
-              if (m != -1) sub(".*\"([^\"]+)\".*", "\\1", regmatches(x, m)) else NA_character_
-            })
-            data.frame(CHR = as.character(tmp[[1]]), START = tmp[[3]], END = tmp[[4]], Gene = g_id, stringsAsFactors = FALSE)
-          } else {
-            tmp <- utils::read.table(ann, sep = "\t", header = FALSE, stringsAsFactors = FALSE, quote = "")
-            tmp <- tmp[tmp[, 3] == "gene", ]
-            g_id <- sapply(tmp[, 9], function(x) {
-              m <- regexpr("gene_name\\s+\"([^\"]+)\"", x)
-              if (m == -1) m <- regexpr("gene_id\\s+\"([^\"]+)\"", x)
-              if (m != -1) sub(".*\"([^\"]+)\".*", "\\1", regmatches(x, m)) else NA_character_
-            })
-            data.frame(CHR = as.character(tmp[, 1]), START = as.numeric(tmp[, 4]), END = as.numeric(tmp[, 5]), Gene = g_id, stringsAsFactors = FALSE)
-          }
-        }, error = function(e) NULL)
-        
-        if (!is.null(ann) && nrow(ann) > 0) {
-          ann <- ann[!is.na(ann$Gene) & ann$Gene != "", ]
-          d$SNP_Start <- d$BP - window_kb * 1000
-          d$SNP_End <- d$BP + window_kb * 1000
-          
-          if (requireNamespace("data.table", quietly = TRUE)) {
-            dt_d <- data.table::as.data.table(d)
-            dt_ann <- data.table::as.data.table(ann)
-            data.table::setkey(dt_ann, CHR, START, END)
-            overlaps <- data.table::foverlaps(dt_d, dt_ann, by.x = c("CHR", "SNP_Start", "SNP_End"), type = "any", nomatch = NULL)
-            if (nrow(overlaps) > 0) {
-              overlaps <- overlaps[!is.na(overlaps$Gene), ]
-              # Take first overlapping gene per SNP
-              overlaps <- overlaps[!duplicated(overlaps$SNP), ]
-              d <- merge(d, overlaps[, c("SNP", "Gene"), with = FALSE], by = "SNP", all.x = TRUE, sort = FALSE)
-            }
-          } else {
-            d$Gene <- NA_character_
-            for (i in seq_len(nrow(d))) {
-              c_chr <- as.character(d$CHR[i])
-              sub_ann <- ann[ann$CHR == c_chr, , drop = FALSE]
-              if (nrow(sub_ann) > 0) {
-                ov <- which(d$SNP_Start[i] <= sub_ann$END & d$SNP_End[i] >= sub_ann$START)
-                if (length(ov) > 0) d$Gene[i] <- sub_ann$Gene[ov[1]]
-              }
-            }
-          }
-          d$SNP_Start <- NULL
-          d$SNP_End <- NULL
+      ann <- GPP.GWAS.Annotation.Cache(ann)
+      ext <- if (is.null(ann)) "" else "cached"
+      if (is.null(ann)) ext <- tolower(tools::file_ext(annot))
+    }
+    if (is.data.frame(ann) && nrow(ann) > 0 && all(c("CHR", "START", "END", "Gene") %in% names(ann))) {
+      ann$CHR <- GPP.GWAS.Normalize.Chr(ann$CHR, style = "plain")
+      ann <- ann[!is.na(ann$Gene) & ann$Gene != "", , drop = FALSE]
+      ann <- ann[!is.na(ann$CHR) & ann$CHR != "", , drop = FALSE]
+      d$SNP_Start <- d$BP - window_kb * 1000
+      d$SNP_End <- d$BP + window_kb * 1000
+      
+      if (requireNamespace("data.table", quietly = TRUE)) {
+        dt_d <- data.table::as.data.table(d)
+        dt_ann <- data.table::as.data.table(ann)
+        data.table::setkey(dt_ann, CHR, START, END)
+        overlaps <- data.table::foverlaps(dt_d, dt_ann, by.x = c("CHR", "SNP_Start", "SNP_End"), type = "any", nomatch = NULL)
+        if (nrow(overlaps) > 0) {
+          overlaps <- overlaps[!is.na(overlaps$Gene), ]
+          overlaps <- overlaps[!duplicated(overlaps$SNP), ]
+          d <- merge(d, overlaps[, c("SNP", "Gene"), with = FALSE], by = "SNP", all.x = TRUE, sort = FALSE)
         }
+      } else {
+        d$Gene <- NA_character_
+        for (i in seq_len(nrow(d))) {
+          c_chr <- as.character(d$CHR[i])
+          sub_ann <- ann[ann$CHR == c_chr, , drop = FALSE]
+          if (nrow(sub_ann) > 0) {
+            ov <- which(d$SNP_Start[i] <= sub_ann$END & d$SNP_End[i] >= sub_ann$START)
+            if (length(ov) > 0) d$Gene[i] <- sub_ann$Gene[ov[1]]
+          }
+        }
+      }
+      d$SNP_Start <- NULL
+      d$SNP_End <- NULL
+    } else if (is.character(annot) && length(annot) == 1) {
+      ext <- tolower(tools::file_ext(annot))
+      if (ext %in% c("gtf", "gff", "gff3")) {
+        ann <- GPP.GWAS.Annotation.Cache(annot)
       } else {
         ann <- tryCatch(
           {
-            if (ext %in% c("csv")) utils::read.csv(ann, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE) else utils::read.table(ann, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+            if (ext %in% c("csv")) utils::read.csv(annot, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE) else utils::read.table(annot, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
           },
           error = function(e) NULL
         )
@@ -244,11 +295,12 @@ GPP.GWAS.Significant.Table <- function(dat,
   if (nrow(d) < 1) return(NULL)
   d$LOG10P <- -log10(d$P)
   num_marker <- nrow(d)
-  bonf <- -log10(cut_off / num_marker)
+  bonf <- suppressWarnings(as.numeric(bonferroni))
+  if (!is.finite(bonf)) bonf <- -log10(cut_off / num_marker)
   d_sig <- d[d$LOG10P >= bonf, , drop = FALSE]
   if (nrow(d_sig) < 1) return(NULL)
   if (!("SNP" %in% names(d_sig))) d_sig$SNP <- NA_character_
-  d_sig$CHR <- as.character(d_sig$CHR)
+  d_sig$CHR <- GPP.GWAS.Normalize.Chr(d_sig$CHR, style = "plain")
   d_sig <- d_sig[order(d_sig$CHR, -d_sig$LOG10P, d_sig$BP), , drop = FALSE]
   if (any(!is.na(d_sig$SNP))) {
     key <- paste(d_sig$CHR, d_sig$SNP, sep = "\t")
@@ -286,6 +338,7 @@ GPP.GWAS.Significant.Table <- function(dat,
 GPP.GWAS.Manhattan.Stacked <- function(dat_list,
                                       main = NULL,
                                       cut_off = 0.05,
+                                      bonferroni = NULL,
                                       dpp = 50000,
                                       pch = 1,
                                       cex_points = 0.5,
@@ -331,6 +384,8 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
                                       cex_axis = 1.35,
                                       cex_lab = 1.5,
                                       cex_main = 1.45,
+                                      axis_line_lwd = 1.8,
+                                      axis_tick_lwd = 1.4,
                                       axis_tick_len = -0.01,
                                       title_line = 0.2,
                                       show_main = TRUE,
@@ -503,19 +558,14 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
     col_raw <- chr_cols[chr_id]
     title0 <- make_title(d)
     if (i == 1 && is.null(main)) {
-      if (isTRUE(show_main)) {
-        t0 <- unique(unlist(lapply(dat_list, function(dd) unique(dd$Trait))))
-        t0 <- t0[!is.na(t0) & t0 != ""]
-        main <- if (length(t0) >= 1) paste0("Trait: ", t0[1]) else ""
-      } else {
-        main <- ""
-      }
+      main <- ""
     }
     y_max <- max(y2, finite = TRUE)
     y_max <- max(1, y_max)
     d_sig0 <- NULL
     if (annotate_sig) d_sig0 <- GPP.GWAS.Significant.Table(d,
                                                            cut_off = cut_off,
+                                                           bonferroni = bonferroni,
                                                            max_per_chr = max_label_per_chr,
                                                            label_priority = label_priority,
                                                            annot = annot,
@@ -555,7 +605,8 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
     col_point <- grDevices::adjustcolor(col_raw, alpha.f = alpha)
     graphics::points(x, y2, pch = pch, cex = cex_points, col = col_point, lwd = point_lwd)
     num_marker <- nrow(d)
-    bonf <- -log10(cut_off / num_marker)
+    bonf <- suppressWarnings(as.numeric(bonferroni))
+    if (!is.finite(bonf)) bonf <- -log10(cut_off / num_marker)
     graphics::abline(h = bonf, col = line_col, lwd = 2)
     if (show_fdr) {
       p_sorted <- sort(d$P[is.finite(d$P) & d$P > 0 & d$P <= 1])
@@ -574,7 +625,14 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
                        lwd = sig_lwd)
     }
     if (i == n_panel) {
-      graphics::axis(1, at = ticks, labels = chr_levels, las = 1, cex.axis = cex_axis, tck = axis_tick_len)
+      graphics::axis(1,
+                     at = ticks,
+                     labels = chr_levels,
+                     las = 1,
+                     cex.axis = cex_axis,
+                     tck = axis_tick_len,
+                     lwd = axis_line_lwd,
+                     lwd.ticks = axis_tick_lwd)
     } else {
       graphics::axis(1, at = ticks, labels = FALSE, tick = FALSE, tck = axis_tick_len)
     }
@@ -584,7 +642,14 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
     y0 <- ceiling(y_tick_min / y_step) * y_step
     y1 <- floor(y_lim / y_step) * y_step
     y_ticks <- if (is.finite(y0) && is.finite(y1) && y1 >= y0) seq(y0, y1, by = y_step) else numeric(0)
-    graphics::axis(2, at = y_ticks, labels = y_ticks, las = 1, cex.axis = cex_axis, tck = axis_tick_len)
+    graphics::axis(2,
+                   at = y_ticks,
+                   labels = y_ticks,
+                   las = 1,
+                   cex.axis = cex_axis,
+                   tck = axis_tick_len,
+                   lwd = axis_line_lwd,
+                   lwd.ticks = axis_tick_lwd)
     if (label_side == "right") graphics::mtext(title0, side = 4, line = 0.6, cex = label_cex)
     if (annotate_sig) {
       d_sig <- d_sig0
@@ -823,6 +888,7 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
 GPP.GWAS.Manhattan.Horizontal <- function(dat,
                                          main = NULL,
                                          cut_off = 0.05,
+                                         bonferroni = NULL,
                                          dpp = 50000,
                                          pch = 21,
                                          cex_points = 0.35,
@@ -893,7 +959,8 @@ GPP.GWAS.Manhattan.Horizontal <- function(dat,
   cumpos <- cumpos[idx_keep]
   chr_id <- as.integer(dat$CHR[idx_keep])
   num_marker <- sum(is.finite(dat$P) & dat$P > 0 & dat$P <= 1)
-  bonf <- -log10(cut_off / num_marker)
+  bonf <- suppressWarnings(as.numeric(bonferroni))
+  if (!is.finite(bonf)) bonf <- -log10(cut_off / num_marker)
   p_sorted <- sort(dat$P[is.finite(dat$P) & dat$P > 0 & dat$P <= 1])
   spd <- abs(cut_off - p_sorted * num_marker / cut_off)
   spd <- spd[is.finite(spd)]
@@ -957,6 +1024,7 @@ GPP.GWAS.Manhattan.Horizontal <- function(dat,
 GPP.GWAS.Manhattan.Layered <- function(dat_list,
                                        main = NULL,
                                        cut_off = 0.05,
+                                       bonferroni = NULL,
                                        dpp = 50000,
                                        pch = 21,
                                        cex_points = 0.35,
@@ -1060,7 +1128,8 @@ GPP.GWAS.Manhattan.Layered <- function(dat_list,
     t0 <- if ("Trait" %in% names(meta)) meta$Trait[1] else NA_character_
     track_titles[i] <- paste(na.omit(c(s0, m0, t0)), collapse = " | ")
     num_marker <- sum(is.finite(d$P) & d$P > 0 & d$P <= 1)
-    track_bonf[i] <- -log10(cut_off / num_marker)
+    track_bonf[i] <- suppressWarnings(as.numeric(bonferroni))
+    if (!is.finite(track_bonf[i])) track_bonf[i] <- -log10(cut_off / num_marker)
     p_sorted <- sort(d$P[is.finite(d$P) & d$P > 0 & d$P <= 1])
     spd <- abs(cut_off - p_sorted * num_marker / cut_off)
     spd <- spd[is.finite(spd)]
@@ -1072,9 +1141,7 @@ GPP.GWAS.Manhattan.Layered <- function(dat_list,
   for (i in seq_along(track_height)) offsets[i] <- sum(track_height[seq_len(i - 1)], na.rm = TRUE) + track_gap * (i - 1)
   ylim <- c(0, max(offsets + track_height, na.rm = TRUE) + 0.5)
   if (is.null(main)) {
-    t0 <- unique(unlist(lapply(dat_list, function(d) unique(d$Trait))))
-    t0 <- t0[!is.na(t0) & t0 != ""]
-    main <- if (length(t0) >= 1) paste0("Trait: ", t0[1]) else ""
+    main <- ""
   }
   graphics::plot.default(NA,
                          xlim = xlim,
@@ -1107,13 +1174,67 @@ GPP.GWAS.Manhattan.Layered <- function(dat_list,
   invisible(list(chr_levels = chr_levels, ticks = ticks, offsets = offsets, track_height = track_height))
 }
 
+GPP.GWAS.Collect.Significant <- function(dat_list,
+                                         cut_off = 0.05,
+                                         bonferroni = NULL,
+                                         max_label_per_chr = Inf,
+                                         annot = NULL,
+                                         label_priority = c("Gene", "SNP"),
+                                         window_kb = 10,
+                                         dedup_pos_bin = 1,
+                                         out_sig = NULL) {
+  if (is.null(dat_list) || length(dat_list) < 1) {
+    sig_df <- NULL
+  } else {
+    sig_all <- lapply(dat_list, function(d) {
+      d_sig <- GPP.GWAS.Significant.Table(d,
+                                          cut_off = cut_off,
+                                          bonferroni = bonferroni,
+                                          max_per_chr = max_label_per_chr,
+                                          label_priority = label_priority,
+                                          annot = annot,
+                                          window_kb = window_kb,
+                                          dedup_by_position = TRUE,
+                                          dedup_pos_bin = dedup_pos_bin)
+      if (is.null(d_sig) || nrow(d_sig) < 1) return(NULL)
+      meta <- unique(d[, c("Software", "Model", "Trait"), drop = FALSE])
+      s0 <- if ("Software" %in% names(meta)) meta$Software[1] else NA_character_
+      m0 <- if ("Model" %in% names(meta)) meta$Model[1] else NA_character_
+      t0 <- if ("Trait" %in% names(meta)) meta$Trait[1] else NA_character_
+      d_sig$Panel <- paste(na.omit(c(s0, m0, t0)), collapse = ".")
+      d_sig
+    })
+    sig_all <- sig_all[!vapply(sig_all, is.null, logical(1))]
+    sig_df <- if (length(sig_all) >= 1) do.call(rbind, sig_all) else NULL
+  }
+  if (!is.null(out_sig)) {
+    out_sig <- normalizePath(as.character(out_sig), winslash = "\\", mustWork = FALSE)
+    ext <- tolower(tools::file_ext(out_sig))
+    if (ext %in% c("xlsx")) {
+      if (requireNamespace("openxlsx", quietly = TRUE)) {
+        wb <- openxlsx::createWorkbook()
+        openxlsx::addWorksheet(wb, "Significant")
+        openxlsx::writeData(wb, "Significant", sig_df)
+        openxlsx::saveWorkbook(wb, out_sig, overwrite = TRUE)
+      } else {
+        utils::write.csv(sig_df, sub("\\.xlsx$", ".csv", out_sig, ignore.case = TRUE), row.names = FALSE, quote = TRUE)
+      }
+    } else {
+      utils::write.csv(sig_df, out_sig, row.names = FALSE, quote = TRUE)
+    }
+  }
+  invisible(sig_df)
+}
+
 GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        files = NULL,
                                                        trait = NULL,
                                                        out = NULL,
                                                        width = 14,
                                                        height = 16,
+                                                       preset = c("default", "pub_large"),
                                                        cut_off = 0.05,
+                                                       bonferroni = NULL,
                                                        dpp = 50000,
                                                        cex_points = 0.35,
                                                        plot_style = c("Oceanic", "Gray", "PLINK"),
@@ -1123,6 +1244,10 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        cex_sig = 0.65,
                                                        label_side = c("right", "top", "none"),
                                                        label_cex = 0.95,
+                                                       cex_axis = 1.35,
+                                                       cex_lab = 1.5,
+                                                       axis_line_lwd = 1.8,
+                                                       axis_tick_lwd = 1.4,
                                                        plot_mode = c("stacked", "layered", "sideways"),
                                                        show_main = TRUE,
                                                        annotate_sig = TRUE,
@@ -1130,6 +1255,7 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        annot = NULL,
                                                        label_priority = c("Gene", "SNP"),
                                                        out_sig = NULL,
+                                                       draw = TRUE,
                                                        label_dx_frac = 0.018,
                                                        label_offset = 0.85,
                                                        min_arrow_len = 1.05,
@@ -1141,11 +1267,21 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        dedup_pos_bin = 1,
                                                        cluster_x_frac = 0.01,
                                                        axis_tick_len = -0.01) {
+  preset <- match.arg(preset)
   plot_style <- match.arg(plot_style)
   label_side <- match.arg(label_side)
   plot_mode <- match.arg(plot_mode)
   label_priority <- match.arg(label_priority, several.ok = TRUE)
   label_placement <- match.arg(label_placement)
+  if (identical(preset, "pub_large")) {
+    cex_points <- 0.8
+    alpha <- 0.9
+    label_cex <- 1.3
+    cex_axis <- 1.6
+    cex_lab <- 1.8
+    axis_line_lwd <- 2.4
+    axis_tick_lwd <- 1.9
+  }
   if (is.null(files)) {
     if (is.null(dir)) stop("Either dir or files must be provided.")
     dir <- normalizePath(as.character(dir), winslash = "\\", mustWork = TRUE)
@@ -1158,7 +1294,9 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     }
     files <- cand
   }
-  files <- unique(normalizePath(as.character(files), winslash = "\\", mustWork = TRUE))
+  files <- trimws(as.character(files))
+  files <- files[!is.na(files) & nzchar(files)]
+  files <- unique(normalizePath(files, winslash = "\\", mustWork = TRUE))
   if (length(files) < 1) stop("No input files.")
   if (is.null(out)) {
     base_out <- if (!is.null(trait)) trait else "Trait"
@@ -1181,16 +1319,29 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     if (length(t0) >= 1) trait <- t0[1]
   }
   dat_list <- dat_list[order(vapply(dat_list, function(d) paste0(d$Software[1], "_", d$Model[1]), character(1)))]
+  if (is.null(out_sig)) {
+    out_sig <- if (is.null(out)) NULL else sub("\\.pdf$", ".Significant.csv", out, ignore.case = TRUE)
+  }
+  if (!isTRUE(draw)) {
+    sig_df <- GPP.GWAS.Collect.Significant(dat_list,
+                                          cut_off = cut_off,
+                                          bonferroni = bonferroni,
+                                          max_label_per_chr = max_label_per_chr,
+                                          annot = annot,
+                                          label_priority = label_priority,
+                                          window_kb = window_kb,
+                                          dedup_pos_bin = dedup_pos_bin,
+                                          out_sig = out_sig)
+    return(invisible(list(out = NULL, trait = trait, data = dat_list, sig = sig_df)))
+  }
   grDevices::pdf(out, width = width, height = height, useDingbats = FALSE)
   on.exit(grDevices::dev.off(), add = TRUE)
   old_par <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(old_par), add = TRUE)
-  if (is.null(out_sig)) {
-    out_sig <- sub("\\.pdf$", ".Significant.csv", out, ignore.case = TRUE)
-  }
   if (plot_mode == "stacked") {
     GPP.GWAS.Manhattan.Stacked(dat_list,
                               cut_off = cut_off,
+                              bonferroni = bonferroni,
                               dpp = dpp,
                               cex_points = cex_points,
                               plot_style = plot_style,
@@ -1213,12 +1364,17 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                               window_kb = window_kb,
                               dedup_pos_bin = dedup_pos_bin,
                               cluster_x_frac = cluster_x_frac,
+                              cex_axis = cex_axis,
+                              cex_lab = cex_lab,
+                              axis_line_lwd = axis_line_lwd,
+                              axis_tick_lwd = axis_tick_lwd,
                               axis_tick_len = axis_tick_len,
                               out_sig = out_sig)
   } else if (plot_mode == "layered") {
     graphics::par(mar = c(4.5, 6.5, 3.2, 6.5))
     GPP.GWAS.Manhattan.Layered(dat_list,
                               cut_off = cut_off,
+                              bonferroni = bonferroni,
                               dpp = dpp,
                               cex_points = cex_points,
                               plot_style = plot_style,
@@ -1233,6 +1389,7 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     for (i in seq_along(dat_list)) {
       GPP.GWAS.Manhattan.Horizontal(dat_list[[i]],
                                    cut_off = cut_off,
+                                   bonferroni = bonferroni,
                                    dpp = dpp,
                                    cex_points = cex_points,
                                    plot_style = plot_style,
