@@ -1,30 +1,46 @@
 GPP <- function(file_path,
                 graph = c("PCA", "genotype", "GWAS"),
                 PCA.col = NULL,
-                PCA.3d = NULL,
+                PCA.3d = TRUE,
                 PCA.legend = NULL,
                 PCA.pch.2D = 20,
                 PCA.pch.3D = 20,
-                PCA.cex.lab = 1.4,
-                PCA.cex.symbols = 1,
+                PCA.cex.lab = 1.8,
+                PCA.cex.symbols = 1.4,
                 PCA.lwd.2D = 2,
-                PCA.lwd.3D = 3,
+                PCA.lwd.3D = 4,
                 PCA.bty.2D = "o",
                 PCA.2D.pairs = NULL,
-                PCA.cex.2D = 1,
-                PCA.alpha = 1,
-                PCA.legend.cex = 1,
-                PCA.legend.outside.3D = FALSE,
-                PCA.legend.inset.3D = 0,
-                PCA.mar.right.3D = 12,
+                PCA.cex.2D = 1.1,
+                PCA.alpha = 0.75,
+                PCA.legend.cex = 1.2,
+                PCA.legend.outside.3D = TRUE,
+                PCA.legend.inset.3D = c(-0.3, 0),
+                PCA.mar.right.3D = 14,
                 PCA.meta_path = NULL,
                 PCA.meta_taxa_col = 1,
                 PCA.meta_group_col = 2,
                 PCA.meta_color_col = NULL,
+                PCA.dynamic3D.backend = c("plotly", "rgl", "python"),
+                PCA.python.cmd = NULL,
+                PCA.dynamic3D.title = "Interactive 3D PCA",
+                PCA.dynamic3D.marker.size = 4,
+                PCA.dynamic3D.opacity = 0.8,
                 name.of.trait = NULL,
                 model_store = NULL,
                 Y.names = NULL,
                 ...) {
+  PCA.dynamic3D.backend <- match.arg(PCA.dynamic3D.backend)
+
+  if (!missing(file_path) && !is.null(file_path) && nzchar(file_path) && dir.exists(file_path)) {
+    wd0 <- getwd()
+    on.exit({
+      tryCatch(setwd(wd0), error = function(e) invisible(NULL))
+    }, add = TRUE)
+    setwd(file_path)
+  }
+  try(graphics.off(), silent = TRUE)
+
   .gpp_do <- function(fun, args) {
     f <- get(fun, mode = "function")
     keep <- intersect(names(args), names(formals(f)))
@@ -240,10 +256,49 @@ GPP <- function(file_path,
       ok_legend <- is.list(PCA.legend) && !is.null(PCA.legend$taxa) && !is.null(PCA.legend$color)
       if (ok_legend) {
         message("Using provided PCA.legend data to generate legend.")
+        PCA.legend$outside.3D <- isTRUE(PCA.legend.outside.3D)
+        PCA.legend$inset.3D   <- PCA.legend.inset.3D
+        if (is.null(PCA.legend$cex) || !is.numeric(PCA.legend$cex) || length(PCA.legend$cex) == 0) {
+          PCA.legend$cex <- PCA.legend.cex
+        }
+        if (is.null(PCA.legend$pch) || length(PCA.legend$pch) == 0) {
+          PCA.legend$pch <- PCA.pch.3D
+        }
+        if (is.null(PCA.legend$legend.pos) || !nzchar(PCA.legend$legend.pos)) {
+          PCA.legend$legend.pos <- "topright"
+        }
+        if (is.null(PCA.legend$ncol) || !is.finite(as.integer(PCA.legend$ncol))) {
+          PCA.legend$ncol <- 1
+        }
+        if (is.null(PCA.legend$bty) || !nzchar(PCA.legend$bty)) {
+          PCA.legend$bty <- "n"
+        }
       } else {
         message("Invalid PCA.legend format. Skipping legend generation.")
         PCA.legend <- NULL
       }
+    }
+    if (is.null(PCA.legend) && !is.null(auto) && !is.null(auto$legend) && is.list(auto$legend)) {
+      l <- auto$legend
+      l$outside.3D <- isTRUE(PCA.legend.outside.3D)
+      l$inset.3D   <- PCA.legend.inset.3D
+      if (is.null(l$cex) || !is.numeric(l$cex) || length(l$cex) == 0) {
+        l$cex <- PCA.legend.cex
+      }
+      if (is.null(l$pch) || length(l$pch) == 0) {
+        l$pch <- PCA.pch.3D
+      }
+      if (is.null(l$legend.pos) || !nzchar(l$legend.pos)) {
+        l$legend.pos <- "topright"
+      }
+      if (is.null(l$ncol) || !is.finite(as.integer(l$ncol))) {
+        l$ncol <- 1
+      }
+      if (is.null(l$bty) || !nzchar(l$bty)) {
+        l$bty <- "n"
+      }
+      PCA.legend <- l
+      rm(l)
     }
 
     args <- c(
@@ -267,7 +322,12 @@ GPP <- function(file_path,
         PCA.legend.cex = PCA.legend.cex,
         PCA.legend.outside.3D = PCA.legend.outside.3D,
         PCA.legend.inset.3D = PCA.legend.inset.3D,
-        PCA.mar.right.3D = PCA.mar.right.3D
+        PCA.mar.right.3D = PCA.mar.right.3D,
+        PCA.dynamic3D.backend = PCA.dynamic3D.backend,
+        PCA.python.cmd = PCA.python.cmd,
+        PCA.dynamic3D.title = PCA.dynamic3D.title,
+        PCA.dynamic3D.marker.size = PCA.dynamic3D.marker.size,
+        PCA.dynamic3D.opacity = PCA.dynamic3D.opacity
       ),
       dots
     )
