@@ -213,7 +213,6 @@ GPP.GWAS.Read.Manhattan <- function(path, trait = NULL, software = NULL, model =
 
 GPP.GWAS.Significant.Table <- function(dat,
                                       cut_off = 0.05,
-                                      bonferroni = NULL,
                                       max_per_chr = 1,
                                       label_priority = c("Gene", "SNP"),
                                       annot = NULL,
@@ -295,8 +294,7 @@ GPP.GWAS.Significant.Table <- function(dat,
   if (nrow(d) < 1) return(NULL)
   d$LOG10P <- -log10(d$P)
   num_marker <- nrow(d)
-  bonf <- suppressWarnings(as.numeric(bonferroni))
-  if (!is.finite(bonf)) bonf <- -log10(cut_off / num_marker)
+  bonf <- -log10(cut_off / num_marker)
   d_sig <- d[d$LOG10P >= bonf, , drop = FALSE]
   if (nrow(d_sig) < 1) return(NULL)
   if (!("SNP" %in% names(d_sig))) d_sig$SNP <- NA_character_
@@ -338,11 +336,10 @@ GPP.GWAS.Significant.Table <- function(dat,
 GPP.GWAS.Manhattan.Stacked <- function(dat_list,
                                       main = NULL,
                                       cut_off = 0.05,
-                                      bonferroni = NULL,
                                       dpp = 50000,
                                       pch = 1,
                                       cex_points = 0.5,
-                                      plot_style = c("Oceanic", "Gray", "PLINK"),
+                                      plot_style = c("Oceanic", "Gray", "PLINK", "MarineBreeze"),
                                       col_alt = NULL,
                                       alpha = 0.9,
                                       point_lwd = 0.9,
@@ -440,6 +437,8 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
   if (is.null(col_alt)) {
     if (plot_style == "Oceanic") {
       col_alt <- c("#EC5f67", "#FAC863", "#99C794", "#6699CC", "#C594C5")
+    } else if (plot_style == "MarineBreeze") {
+      col_alt <- c("#BFDFD2", "#51999F", "#4198AC", "#7BC0CD", "#DBCB92", "#ECB66C", "#EA9E58", "#ED8D5A")
     } else {
       col_alt <- c("gray10", "gray70")
     }
@@ -527,6 +526,7 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
   make_title <- function(d) {
     meta <- unique(d[, c("Software", "Model", "Trait"), drop = FALSE])
     s0 <- if ("Software" %in% names(meta)) meta$Software[1] else NA_character_
+    if (!is.na(s0) && toupper(s0) == "RMVP") s0 <- "rMVP"
     m0 <- if ("Model" %in% names(meta)) meta$Model[1] else NA_character_
     t0 <- if ("Trait" %in% names(meta)) meta$Trait[1] else NA_character_
     paste(na.omit(c(s0, m0, t0)), collapse = ".")
@@ -565,7 +565,6 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
     d_sig0 <- NULL
     if (annotate_sig) d_sig0 <- GPP.GWAS.Significant.Table(d,
                                                            cut_off = cut_off,
-                                                           bonferroni = bonferroni,
                                                            max_per_chr = max_label_per_chr,
                                                            label_priority = label_priority,
                                                            annot = annot,
@@ -605,8 +604,7 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
     col_point <- grDevices::adjustcolor(col_raw, alpha.f = alpha)
     graphics::points(x, y2, pch = pch, cex = cex_points, col = col_point, lwd = point_lwd)
     num_marker <- nrow(d)
-    bonf <- suppressWarnings(as.numeric(bonferroni))
-    if (!is.finite(bonf)) bonf <- -log10(cut_off / num_marker)
+    bonf <- -log10(cut_off / num_marker)
     graphics::abline(h = bonf, col = line_col, lwd = 2)
     if (show_fdr) {
       p_sorted <- sort(d$P[is.finite(d$P) & d$P > 0 & d$P <= 1])
@@ -888,11 +886,10 @@ GPP.GWAS.Manhattan.Stacked <- function(dat_list,
 GPP.GWAS.Manhattan.Horizontal <- function(dat,
                                          main = NULL,
                                          cut_off = 0.05,
-                                         bonferroni = NULL,
                                          dpp = 50000,
                                          pch = 21,
                                          cex_points = 0.35,
-                                         plot_style = c("Oceanic", "Gray", "PLINK"),
+                                         plot_style = c("Oceanic", "Gray", "PLINK", "MarineBreeze"),
                                          col_alt = NULL,
                                          alpha = 0.35,
                                          border_alpha = 0.9,
@@ -959,8 +956,7 @@ GPP.GWAS.Manhattan.Horizontal <- function(dat,
   cumpos <- cumpos[idx_keep]
   chr_id <- as.integer(dat$CHR[idx_keep])
   num_marker <- sum(is.finite(dat$P) & dat$P > 0 & dat$P <= 1)
-  bonf <- suppressWarnings(as.numeric(bonferroni))
-  if (!is.finite(bonf)) bonf <- -log10(cut_off / num_marker)
+  bonf <- -log10(cut_off / num_marker)
   p_sorted <- sort(dat$P[is.finite(dat$P) & dat$P > 0 & dat$P <= 1])
   spd <- abs(cut_off - p_sorted * num_marker / cut_off)
   spd <- spd[is.finite(spd)]
@@ -971,6 +967,8 @@ GPP.GWAS.Manhattan.Horizontal <- function(dat,
   if (is.null(col_alt)) {
     if (plot_style == "Oceanic") {
       col_alt <- c("#EC5f67", "#FAC863", "#99C794", "#6699CC", "#C594C5")
+    } else if (plot_style == "MarineBreeze") {
+      col_alt <- c("#BFDFD2", "#51999F", "#4198AC", "#7BC0CD", "#DBCB92", "#ECB66C", "#EA9E58", "#ED8D5A")
     } else {
       col_alt <- c("gray10", "gray70")
     }
@@ -981,6 +979,7 @@ GPP.GWAS.Manhattan.Horizontal <- function(dat,
   if (is.null(main)) {
     meta <- unique(dat[, c("Software", "Model", "Trait"), drop = FALSE])
     s0 <- if ("Software" %in% names(meta)) meta$Software[1] else NA_character_
+    if (!is.na(s0) && toupper(s0) == "RMVP") s0 <- "rMVP"
     m0 <- if ("Model" %in% names(meta)) meta$Model[1] else NA_character_
     t0 <- if ("Trait" %in% names(meta)) meta$Trait[1] else NA_character_
     main <- paste(na.omit(c(s0, m0, t0)), collapse = " | ")
@@ -1024,11 +1023,10 @@ GPP.GWAS.Manhattan.Horizontal <- function(dat,
 GPP.GWAS.Manhattan.Layered <- function(dat_list,
                                        main = NULL,
                                        cut_off = 0.05,
-                                       bonferroni = NULL,
                                        dpp = 50000,
                                        pch = 21,
                                        cex_points = 0.35,
-                                       plot_style = c("Oceanic", "Gray", "PLINK"),
+                                       plot_style = c("Oceanic", "Gray", "PLINK", "MarineBreeze"),
                                        col_alt = NULL,
                                        alpha = 0.35,
                                        border_alpha = 0.9,
@@ -1072,6 +1070,8 @@ GPP.GWAS.Manhattan.Layered <- function(dat_list,
   if (is.null(col_alt)) {
     if (plot_style == "Oceanic") {
       col_alt <- c("#EC5f67", "#FAC863", "#99C794", "#6699CC", "#C594C5")
+    } else if (plot_style == "MarineBreeze") {
+      col_alt <- c("#BFDFD2", "#51999F", "#4198AC", "#7BC0CD", "#DBCB92", "#ECB66C", "#EA9E58", "#ED8D5A")
     } else {
       col_alt <- c("gray10", "gray70")
     }
@@ -1124,12 +1124,12 @@ GPP.GWAS.Manhattan.Layered <- function(dat_list,
     track_max[i] <- max(logp2, finite = TRUE)
     meta <- unique(d[, c("Software", "Model", "Trait"), drop = FALSE])
     s0 <- if ("Software" %in% names(meta)) meta$Software[1] else NA_character_
+    if (!is.na(s0) && toupper(s0) == "RMVP") s0 <- "rMVP"
     m0 <- if ("Model" %in% names(meta)) meta$Model[1] else NA_character_
     t0 <- if ("Trait" %in% names(meta)) meta$Trait[1] else NA_character_
     track_titles[i] <- paste(na.omit(c(s0, m0, t0)), collapse = " | ")
     num_marker <- sum(is.finite(d$P) & d$P > 0 & d$P <= 1)
-    track_bonf[i] <- suppressWarnings(as.numeric(bonferroni))
-    if (!is.finite(track_bonf[i])) track_bonf[i] <- -log10(cut_off / num_marker)
+    track_bonf[i] <- -log10(cut_off / num_marker)
     p_sorted <- sort(d$P[is.finite(d$P) & d$P > 0 & d$P <= 1])
     spd <- abs(cut_off - p_sorted * num_marker / cut_off)
     spd <- spd[is.finite(spd)]
@@ -1174,58 +1174,6 @@ GPP.GWAS.Manhattan.Layered <- function(dat_list,
   invisible(list(chr_levels = chr_levels, ticks = ticks, offsets = offsets, track_height = track_height))
 }
 
-GPP.GWAS.Collect.Significant <- function(dat_list,
-                                         cut_off = 0.05,
-                                         bonferroni = NULL,
-                                         max_label_per_chr = Inf,
-                                         annot = NULL,
-                                         label_priority = c("Gene", "SNP"),
-                                         window_kb = 10,
-                                         dedup_pos_bin = 1,
-                                         out_sig = NULL) {
-  if (is.null(dat_list) || length(dat_list) < 1) {
-    sig_df <- NULL
-  } else {
-    sig_all <- lapply(dat_list, function(d) {
-      d_sig <- GPP.GWAS.Significant.Table(d,
-                                          cut_off = cut_off,
-                                          bonferroni = bonferroni,
-                                          max_per_chr = max_label_per_chr,
-                                          label_priority = label_priority,
-                                          annot = annot,
-                                          window_kb = window_kb,
-                                          dedup_by_position = TRUE,
-                                          dedup_pos_bin = dedup_pos_bin)
-      if (is.null(d_sig) || nrow(d_sig) < 1) return(NULL)
-      meta <- unique(d[, c("Software", "Model", "Trait"), drop = FALSE])
-      s0 <- if ("Software" %in% names(meta)) meta$Software[1] else NA_character_
-      m0 <- if ("Model" %in% names(meta)) meta$Model[1] else NA_character_
-      t0 <- if ("Trait" %in% names(meta)) meta$Trait[1] else NA_character_
-      d_sig$Panel <- paste(na.omit(c(s0, m0, t0)), collapse = ".")
-      d_sig
-    })
-    sig_all <- sig_all[!vapply(sig_all, is.null, logical(1))]
-    sig_df <- if (length(sig_all) >= 1) do.call(rbind, sig_all) else NULL
-  }
-  if (!is.null(out_sig)) {
-    out_sig <- normalizePath(as.character(out_sig), winslash = "\\", mustWork = FALSE)
-    ext <- tolower(tools::file_ext(out_sig))
-    if (ext %in% c("xlsx")) {
-      if (requireNamespace("openxlsx", quietly = TRUE)) {
-        wb <- openxlsx::createWorkbook()
-        openxlsx::addWorksheet(wb, "Significant")
-        openxlsx::writeData(wb, "Significant", sig_df)
-        openxlsx::saveWorkbook(wb, out_sig, overwrite = TRUE)
-      } else {
-        utils::write.csv(sig_df, sub("\\.xlsx$", ".csv", out_sig, ignore.case = TRUE), row.names = FALSE, quote = TRUE)
-      }
-    } else {
-      utils::write.csv(sig_df, out_sig, row.names = FALSE, quote = TRUE)
-    }
-  }
-  invisible(sig_df)
-}
-
 GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        files = NULL,
                                                        trait = NULL,
@@ -1234,10 +1182,9 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        height = 16,
                                                        preset = c("default", "pub_large"),
                                                        cut_off = 0.05,
-                                                       bonferroni = NULL,
                                                        dpp = 50000,
                                                        cex_points = 0.35,
-                                                       plot_style = c("Oceanic", "Gray", "PLINK"),
+                                                       plot_style = c("MarineBreeze", "Oceanic", "Gray", "PLINK"),
                                                        alpha = 0.35,
                                                        border_alpha = 0.9,
                                                        highlight = TRUE,
@@ -1255,7 +1202,6 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
                                                        annot = NULL,
                                                        label_priority = c("Gene", "SNP"),
                                                        out_sig = NULL,
-                                                       draw = TRUE,
                                                        label_dx_frac = 0.018,
                                                        label_offset = 0.85,
                                                        min_arrow_len = 1.05,
@@ -1294,9 +1240,7 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     }
     files <- cand
   }
-  files <- trimws(as.character(files))
-  files <- files[!is.na(files) & nzchar(files)]
-  files <- unique(normalizePath(files, winslash = "\\", mustWork = TRUE))
+  files <- unique(normalizePath(as.character(files), winslash = "\\", mustWork = TRUE))
   if (length(files) < 1) stop("No input files.")
   if (is.null(out)) {
     base_out <- if (!is.null(trait)) trait else "Trait"
@@ -1319,29 +1263,16 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     if (length(t0) >= 1) trait <- t0[1]
   }
   dat_list <- dat_list[order(vapply(dat_list, function(d) paste0(d$Software[1], "_", d$Model[1]), character(1)))]
-  if (is.null(out_sig)) {
-    out_sig <- if (is.null(out)) NULL else sub("\\.pdf$", ".Significant.csv", out, ignore.case = TRUE)
-  }
-  if (!isTRUE(draw)) {
-    sig_df <- GPP.GWAS.Collect.Significant(dat_list,
-                                          cut_off = cut_off,
-                                          bonferroni = bonferroni,
-                                          max_label_per_chr = max_label_per_chr,
-                                          annot = annot,
-                                          label_priority = label_priority,
-                                          window_kb = window_kb,
-                                          dedup_pos_bin = dedup_pos_bin,
-                                          out_sig = out_sig)
-    return(invisible(list(out = NULL, trait = trait, data = dat_list, sig = sig_df)))
-  }
   grDevices::pdf(out, width = width, height = height, useDingbats = FALSE)
   on.exit(grDevices::dev.off(), add = TRUE)
   old_par <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(old_par), add = TRUE)
+  if (is.null(out_sig)) {
+    out_sig <- sub("\\.pdf$", ".Significant.csv", out, ignore.case = TRUE)
+  }
   if (plot_mode == "stacked") {
     GPP.GWAS.Manhattan.Stacked(dat_list,
                               cut_off = cut_off,
-                              bonferroni = bonferroni,
                               dpp = dpp,
                               cex_points = cex_points,
                               plot_style = plot_style,
@@ -1374,7 +1305,6 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     graphics::par(mar = c(4.5, 6.5, 3.2, 6.5))
     GPP.GWAS.Manhattan.Layered(dat_list,
                               cut_off = cut_off,
-                              bonferroni = bonferroni,
                               dpp = dpp,
                               cex_points = cex_points,
                               plot_style = plot_style,
@@ -1389,7 +1319,6 @@ GPP.GWAS.Manhattan.Horizontal.MultiSoftware <- function(dir = NULL,
     for (i in seq_along(dat_list)) {
       GPP.GWAS.Manhattan.Horizontal(dat_list[[i]],
                                    cut_off = cut_off,
-                                   bonferroni = bonferroni,
                                    dpp = dpp,
                                    cex_points = cex_points,
                                    plot_style = plot_style,
